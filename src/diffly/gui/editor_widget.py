@@ -44,6 +44,7 @@ class EditorWidget(QWidget):
         self.editor.tab_width = tab_width
         self.editor.indent_width = indent_guide_width
         self.editor._update_side_width()
+        self.editor.set_placeholder_ranges(self.editor.placeholder_ranges)
         self.editor.viewport().update()
 
     def set_syntax_language(self, language: str | None):
@@ -67,8 +68,16 @@ class EditorWidget(QWidget):
 
     def show_hunks(self, hunks: tuple[Hunk, ...], left: bool, spans: tuple[TextSpan, ...] = ()):
         selections = []
+        placeholders = []
         for hunk in hunks:
             start, end = (hunk.left_start, hunk.left_end) if left else (hunk.right_start, hunk.right_end)
+            other_start, other_end = (
+                (hunk.right_start, hunk.right_end) if left
+                else (hunk.left_start, hunk.left_end)
+            )
+            missing = (other_end - other_start) - (end - start)
+            if missing > 0:
+                placeholders.append((end, missing))
             if start == end:
                 continue
             key = "diff_replace" if hunk.tag == "replace" else (
@@ -102,6 +111,7 @@ class EditorWidget(QWidget):
             selection.format.setBackground(QColor(self.theme.get("diff_text", "#d38b44")))
             selections.append(selection)
         self.editor.setExtraSelections(selections)
+        self.editor.set_placeholder_ranges(tuple(placeholders))
 
     def select_hunk(self, start: int, end: int, column: int = 0):
         document = self.editor.document()

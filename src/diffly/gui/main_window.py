@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollBar,
     QToolBar,
+    QToolButton,
     QWidget,
 )
 
@@ -21,7 +22,7 @@ from diffly.core.documents.syntax import language_for
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.editor_widget import EditorWidget
 from diffly.gui.icons import toolbar_icon
-from diffly.gui.theme import apply_theme, editor_font, load_config, save_selected_theme
+from diffly.gui.theme import apply_theme, editor_font, load_config, save_indent_width, save_selected_theme
 from diffly.platform.macos import install_inline_toolbar
 from diffly.services.file_service import file_stamp, read_file, write_file
 from diffly.services.task_scheduler import TaskScheduler
@@ -119,7 +120,12 @@ class MainWindow(QMainWindow):
             timer.timeout.connect(lambda s=side, e=editor: self._request_syntax(s, e))
             self._syntax_timers[editor] = timer
         self.summary_label = QLabel()
-        self.tab_label = QLabel()
+        self.tab_label = QToolButton()
+        self.tab_label.setObjectName("IndentWidthButton")
+        self.tab_label.setAutoRaise(True)
+        self.tab_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tab_label.setToolTip("Switch tab stops and indent guides between 2 and 4 spaces")
+        self.tab_label.clicked.connect(self._toggle_indent_width)
         self.statusBar().addPermanentWidget(self.summary_label)
         self.statusBar().addPermanentWidget(self.tab_label)
         self._apply_theme(self.config.settings.get("theme", "gruvbox"))
@@ -155,8 +161,8 @@ class MainWindow(QMainWindow):
             edit_menu.addAction(action)
         edit_menu.addSeparator()
         for label, shortcut, callback in (
-            ("Next Difference", "F7", lambda: self._navigate(1)),
-            ("Previous Difference", "Shift+F7", lambda: self._navigate(-1)),
+            ("Next Difference", "Ctrl+Alt+Down", lambda: self._navigate(1)),
+            ("Previous Difference", "Ctrl+Alt+Up", lambda: self._navigate(-1)),
             ("Apply Right to Left", "Ctrl+Alt+Left", lambda: self._transfer(self._selected_hunk, False)),
             ("Apply Left to Right", "Ctrl+Alt+Right", lambda: self._transfer(self._selected_hunk, True)),
             ("Delete Selected Block", "Ctrl+Alt+Delete", lambda: self._delete_selected(self._selected_hunk)),
@@ -179,6 +185,7 @@ class MainWindow(QMainWindow):
         self._theme_actions = {action.text(): action for action in group.actions()}
 
     def _make_toolbar(self):
+        modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
         toolbar = QToolBar("Diff controls", self)
         toolbar.setObjectName("DifflyToolbar")
         toolbar.setMovable(False)
@@ -197,18 +204,23 @@ class MainWindow(QMainWindow):
             self._toolbar_icons[action] = icon_kind
             return action
 
-        self.previous_action = add("Previous", "up", "Previous difference (Shift+F7)", lambda: self._navigate(-1))
-        self.next_action = add("Next", "down", "Next difference (F7)", lambda: self._navigate(1))
+        self.previous_action = add("Previous", "up", f"Previous difference ({modifier}+Up)", lambda: self._navigate(-1))
+        self.next_action = add("Next", "down", f"Next difference ({modifier}+Down)", lambda: self._navigate(1))
         spacer = QWidget(toolbar)
         spacer.setFixedWidth(12)
         toolbar.addWidget(spacer)
-        self.apply_left_action = add("Apply ←", "apply_left", "Copy selected right block to left", lambda: self._transfer(self._selected_hunk, False))
-        self.apply_right_action = add("Apply →", "apply_right", "Copy selected left block to right", lambda: self._transfer(self._selected_hunk, True))
+        self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(self._selected_hunk, False))
+        self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(self._selected_hunk, True))
         spacer = QWidget(toolbar)
         spacer.setFixedWidth(12)
         toolbar.addWidget(spacer)
-        self.delete_left_action = add("Delete L", "delete_left", "Delete selected block from left", lambda: self._delete_selected(self._selected_hunk, True))
-        self.delete_right_action = add("Delete R", "delete_right", "Delete selected block from right", lambda: self._delete_selected(self._selected_hunk, False))
+        self.paste_action = add("Paste", "paste", "Paste clipboard into the active editor", self._paste_current)
+        # Keep side-specific delete actions available to callers without
+        # showing destructive controls in the compact toolbar.
+        self.delete_left_action = QAction("Delete L", self)
+        self.delete_left_action.triggered.connect(lambda: self._delete_selected(self._selected_hunk, True))
+        self.delete_right_action = QAction("Delete R", self)
+        self.delete_right_action.triggered.connect(lambda: self._delete_selected(self._selected_hunk, False))
         self.toolbar = toolbar
         toolbar.installEventFilter(self)
 
@@ -234,11 +246,13 @@ class MainWindow(QMainWindow):
         font = editor_font(self.config.settings)
         tab_width = max(1, int(self.config.settings.get("tab_width", 4)))
         indent_guide_width = max(1, int(self.config.settings.get("indent_guide_width", 4)))
-        self.tab_label.setText(f"Tab Width: {tab_width}")
+        self.tab_label.setText(f"Tab: {tab_width} spaces")
         for editor in (self.left, self.right):
             editor.set_font(font, tab_width, indent_guide_width)
             editor.set_theme(theme)
         self.overview.set_theme(theme)
+        if self._native_toolbar_bridge is not None:
+            self._native_toolbar_bridge.set_theme(theme)
         if self._diff is not None:
             self.left.show_hunks(self._diff.hunks, True, self._diff.left_spans)
             self.right.show_hunks(self._diff.hunks, False, self._diff.right_spans)
@@ -251,13 +265,29 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self.statusBar().showMessage(f"Theme applied but not saved: {exc}")
 
+    def _toggle_indent_width(self):
+        current = max(1, int(self.config.settings.get("tab_width", 4)))
+        width = 4 if current == 2 else 2
+        self.config.settings["tab_width"] = width
+        self.config.settings["indent_guide_width"] = width
+        self.tab_label.setText(f"Tab: {width} spaces")
+        font = editor_font(self.config.settings)
+        for editor in (self.left, self.right):
+            editor.set_font(font, width, width)
+        self._update_horizontal_scroll_range()
+        try:
+            save_indent_width(width)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Tab width changed but not saved: {exc}")
+
     def _sync_scroll(self, source: EditorWidget, target: EditorWidget, value: int):
         if self._syncing_scroll:
             return
         self._syncing_scroll = True
         try:
-            self.shared_scrollbar.setValue(value)
-            target.editor.verticalScrollBar().setValue(value)
+            row = source.editor.visual_row(value) if value else 0
+            self.shared_scrollbar.setValue(row)
+            target.editor.verticalScrollBar().setValue(target.editor.block_for_visual_row(row))
         finally:
             self._syncing_scroll = False
 
@@ -266,14 +296,17 @@ class MainWindow(QMainWindow):
             return
         self._syncing_scroll = True
         try:
-            self.left.editor.verticalScrollBar().setValue(value)
-            self.right.editor.verticalScrollBar().setValue(value)
+            self.left.editor.verticalScrollBar().setValue(self.left.editor.block_for_visual_row(value))
+            self.right.editor.verticalScrollBar().setValue(self.right.editor.block_for_visual_row(value))
         finally:
             self._syncing_scroll = False
 
     def _update_shared_scroll_range(self, *_):
-        bars = (self.left.editor.verticalScrollBar(), self.right.editor.verticalScrollBar())
-        self.shared_scrollbar.setRange(0, max(bar.maximum() for bar in bars))
+        editors = (self.left.editor, self.right.editor)
+        bars = tuple(editor.verticalScrollBar() for editor in editors)
+        self.shared_scrollbar.setRange(0, max(
+            editor.visual_row(bar.maximum()) for editor, bar in zip(editors, bars)
+        ))
         self.shared_scrollbar.setPageStep(max(bar.pageStep() for bar in bars))
 
     def _scroll_both_horizontal(self, value: int):
@@ -297,6 +330,21 @@ class MainWindow(QMainWindow):
         self._scroll_both_horizontal(shared.value())
 
     def eventFilter(self, watched, event):
+        if (watched in (self.left.editor, self.right.editor)
+                and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress)
+                and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            commands = {
+                Qt.Key.Key_Up: lambda: self._navigate(-1),
+                Qt.Key.Key_Down: lambda: self._navigate(1),
+                Qt.Key.Key_Left: lambda: self._transfer(self._selected_hunk, False),
+                Qt.Key.Key_Right: lambda: self._transfer(self._selected_hunk, True),
+            }
+            command = commands.get(event.key())
+            if command is not None:
+                if event.type() == QEvent.Type.KeyPress:
+                    command()
+                event.accept()
+                return True
         if (event.type() == QEvent.Type.Wheel
                 and watched in (self.left.editor.viewport(), self.right.editor.viewport(), self.shared_horizontal_scrollbar)):
             horizontal = (watched is self.shared_horizontal_scrollbar
@@ -339,8 +387,7 @@ class MainWindow(QMainWindow):
             "diffly.next": (self.next_action, "down"),
             "diffly.apply_left": (self.apply_left_action, "apply_left"),
             "diffly.apply_right": (self.apply_right_action, "apply_right"),
-            "diffly.delete_left": (self.delete_left_action, "delete_left"),
-            "diffly.delete_right": (self.delete_right_action, "delete_right"),
+            "diffly.paste": (self.paste_action, "paste"),
         }
         bridge = install_inline_toolbar(self, actions)
         if bridge is not None:
@@ -358,6 +405,11 @@ class MainWindow(QMainWindow):
         if self.left.editor.hasFocus():
             return self.left.editor
         return self.left.editor if self._last_active_side == "left" else self.right.editor
+
+    def _paste_current(self):
+        editor = self.focused_editor()
+        editor.paste()
+        editor.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _refresh_titles(self):
         for editor, label, side in ((self.left, self.left_title, "Left"), (self.right, self.right_title, "Right")):
@@ -395,6 +447,9 @@ class MainWindow(QMainWindow):
     def _documents_changed(self, editor: EditorWidget):
         self._diff = None
         self._selected_hunk = -1
+        self.left.editor.set_placeholder_ranges(())
+        self.right.editor.set_placeholder_ranges(())
+        self._update_shared_scroll_range()
         self._refresh_toolbar()
         self._refresh_stats()
         # Keep the last colors while the next diff runs. QTextCursor selections
@@ -437,6 +492,7 @@ class MainWindow(QMainWindow):
         self._refresh_stats()
         self.left.show_hunks(result.hunks, True, result.left_spans)
         self.right.show_hunks(result.hunks, False, result.right_spans)
+        self._update_shared_scroll_range()
         self.overview.set_hunks(result.hunks)
         self._cursor_hunk_changed(self.left if self._last_active_side == "left" else self.right)
         self.statusBar().showMessage(f"{len(result.hunks)} difference(s)")
@@ -468,11 +524,17 @@ class MainWindow(QMainWindow):
             self.right.select_hunk(hunk.right_start, hunk.right_end, right_column)
         finally:
             self._updating_hunk_selection = False
+        start_row = min(
+            self.left.editor.visual_row(hunk.left_start),
+            self.right.editor.visual_row(hunk.right_start),
+        )
+        self.shared_scrollbar.setValue(max(0, start_row - self.shared_scrollbar.pageStep() // 3))
         self._selected_hunk = row
         active = self.left if self._last_active_side == "left" else self.right
         active.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self._refresh_toolbar()
-        self.statusBar().showMessage(f"Difference {row + 1} of {len(self._diff.hunks)} · Ctrl+Alt+← / → to apply")
+        modifier = "Cmd+Option" if sys.platform == "darwin" else "Ctrl+Alt"
+        self.statusBar().showMessage(f"Difference {row + 1} of {len(self._diff.hunks)} · {modifier}+← / → to apply")
 
     def _navigate(self, step: int):
         if self._diff is None or not self._diff.hunks:

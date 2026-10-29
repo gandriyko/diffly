@@ -37,6 +37,28 @@ def test_background_diff_rejects_stale_result(qtbot, monkeypatch):
     window.close()
 
 
+def test_internal_placeholder_aligns_matching_lines_without_editing_text(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    left = "a\nb\nextra one\nextra two\nc\nd\n"
+    right = "a\nb\nc\nd\n"
+    window.left.load_text(left)
+    window.right.load_text(right)
+    window._accept_diff(compare(left, right, window.left.state.revision, window.right.state.revision))
+
+    assert window.right.editor.placeholder_ranges == ((2, 2),)
+    left_block = window.left.editor.document().findBlockByNumber(4)
+    right_block = window.right.editor.document().findBlockByNumber(2)
+    left_y = window.left.editor.blockBoundingGeometry(left_block).translated(window.left.editor.contentOffset()).top()
+    right_y = window.right.editor.blockBoundingGeometry(right_block).translated(window.right.editor.contentOffset()).top()
+    assert abs(left_y - right_y) < 1
+    assert window.left.text() == left
+    assert window.right.text() == right
+    assert not window.right.editor.document().isUndoAvailable()
+    window.close()
+
+
 def test_click_changed_line_selects_diff_for_toolbar(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
@@ -58,7 +80,7 @@ def test_click_changed_line_selects_diff_for_toolbar(qtbot, monkeypatch):
     window.close()
 
 
-def test_f7_navigates_differences(qtbot, monkeypatch):
+def test_ctrl_alt_arrows_navigate_and_apply_differences(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
     qtbot.addWidget(window)
@@ -72,15 +94,18 @@ def test_f7_navigates_differences(qtbot, monkeypatch):
     cursor.setPosition(window.left.editor.document().findBlockByNumber(1).position())
     window.left.editor.setTextCursor(cursor)
     window.left.editor.setFocus()
-    qtbot.keyClick(window.left.editor, Qt.Key.Key_F7)
+    modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    qtbot.keyClick(window.left.editor, Qt.Key.Key_Down, modifiers)
     assert window._selected_hunk == 0
     assert window.left.editor.textCursor().blockNumber() == 0
     assert window.left.editor.hasFocus()
-    qtbot.keyClick(window.left.editor, Qt.Key.Key_F7)
+    qtbot.keyClick(window.left.editor, Qt.Key.Key_Down, modifiers)
     assert window._selected_hunk == 1
     assert window.left.editor.textCursor().blockNumber() == 2
-    qtbot.keyClick(window.left.editor, Qt.Key.Key_F7, Qt.KeyboardModifier.ShiftModifier)
+    qtbot.keyClick(window.left.editor, Qt.Key.Key_Up, modifiers)
     assert window._selected_hunk == 0
+    qtbot.keyClick(window.left.editor, Qt.Key.Key_Right, modifiers)
+    assert window.right.text() == "left1\nsame\nright2\n"
     window.close()
 
 
@@ -142,7 +167,8 @@ def test_compact_layout_and_status_information(qtbot):
     assert window.centralWidget().layout().horizontalSpacing() == 1
     assert "1 changed" in window.summary_label.text()
     assert "1 identical" in window.summary_label.text()
-    assert window.tab_label.text() == "Tab Width: 4"
+    width = max(1, int(window.config.settings.get("tab_width", 4)))
+    assert window.tab_label.text() == f"Tab: {width} spaces"
     assert "UTF-8" in window.left_info.text()
     window.close()
 

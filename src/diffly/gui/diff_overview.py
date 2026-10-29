@@ -33,7 +33,11 @@ class DiffOverview(QWidget):
         self.update()
 
     def _total_lines(self) -> int:
-        return max(1, self.left_editor.blockCount(), self.right_editor.blockCount())
+        return max(
+            1,
+            self.left_editor.visual_row(self.left_editor.blockCount()),
+            self.right_editor.visual_row(self.right_editor.blockCount()),
+        )
 
     def _viewport_rect(self) -> tuple[int, int]:
         total = max(1, self.scroll_controller.maximum() + self.scroll_controller.pageStep())
@@ -51,8 +55,15 @@ class DiffOverview(QWidget):
         painter.fillRect(track_x, 0, track_w, self.height(), QColor(c["background"]))
         total = self._total_lines()
         for hunk in self.hunks:
-            start = max(hunk.left_start, hunk.right_start)
-            end = max(hunk.left_end, hunk.right_end, start + 1)
+            start = min(
+                self.left_editor.visual_row(hunk.left_start),
+                self.right_editor.visual_row(hunk.right_start),
+            )
+            end = max(
+                self.left_editor.visual_row(hunk.left_end),
+                self.right_editor.visual_row(hunk.right_end),
+                start + 1,
+            )
             top = round(self.height() * start / total)
             bottom = round(self.height() * end / total)
             color_key = {

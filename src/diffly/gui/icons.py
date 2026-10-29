@@ -24,6 +24,16 @@ def _pixmap(kind: str, color: str) -> QPixmap:
         painter.drawLine(QPointF(*points[0]), QPointF(*points[1]))
         painter.drawLine(QPointF(*points[2]), QPointF(*points[3]))
         painter.drawLine(QPointF(*points[3]), QPointF(*points[4]))
+    elif kind == "paste":
+        # Two overlapping sheets: the back sheet's hidden edges are omitted
+        # so the icon remains clear as a monochrome macOS template image.
+        painter.drawLine(QPointF(9, 7), QPointF(9, 4.5))
+        painter.drawLine(QPointF(9, 4.5), QPointF(10.5, 3))
+        painter.drawLine(QPointF(10.5, 3), QPointF(19, 3))
+        painter.drawLine(QPointF(19, 3), QPointF(20.5, 4.5))
+        painter.drawLine(QPointF(20.5, 4.5), QPointF(20.5, 16.5))
+        painter.drawLine(QPointF(20.5, 16.5), QPointF(16, 16.5))
+        painter.drawRoundedRect(QRectF(3.5, 7, 12.5, 15), 1.5, 1.5)
     else:
         left = QRectF(2.5, 4.5, 7, 15)
         right = QRectF(14.5, 4.5, 7, 15)

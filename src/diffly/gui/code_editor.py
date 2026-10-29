@@ -1,8 +1,47 @@
-"""Plain text editor with line numbers and subtle indent guides."""
+"""Plain text editor with line numbers, indent guides, and diff alignment."""
 
-from PySide6.QtCore import QSize, Qt
+from bisect import bisect_right
+
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import QFrame, QPlainTextDocumentLayout, QPlainTextEdit, QWidget
+
+
+class _AlignedDocumentLayout(QPlainTextDocumentLayout):
+    """Reserve display space for missing lines without changing document text."""
+
+    def __init__(self, document):
+        super().__init__(document)
+        self.before_first = 0.0
+        self.after: dict[int, float] = {}
+        self.line_height = 0.0
+
+    def blockBoundingRect(self, block):
+        if block.blockNumber() == 0 and block.layout().lineCount():
+            line = block.layout().lineAt(0)
+            position = line.position()
+            line.setPosition(QPointF(position.x(), self.before_first))
+        rect = super().blockBoundingRect(block)
+        extra = self.after.get(block.blockNumber(), 0)
+        if extra:
+            rect.setHeight(rect.height() + extra)
+        return rect
+
+    def set_gaps(self, ranges: tuple[tuple[int, int], ...], line_height: float):
+        before_first = 0.0
+        after: dict[int, float] = {}
+        for start, count in ranges:
+            if start == 0:
+                before_first += count * line_height
+            else:
+                after[start - 1] = after.get(start - 1, 0) + count * line_height
+        if (before_first, after) == (self.before_first, self.after):
+            self.line_height = line_height
+            return
+        self.before_first, self.after = before_first, after
+        self.line_height = line_height
+        document = self.document()
+        document.markContentsDirty(0, document.characterCount())
 
 
 class _SideArea(QWidget):
@@ -25,6 +64,12 @@ class CodeEditor(QPlainTextEdit):
         self.syntax_language: str | None = None
         self.indent_width = 4
         self.tab_width = 4
+        self.placeholder_ranges: tuple[tuple[int, int], ...] = ()
+        self._gap_starts: tuple[int, ...] = ()
+        self._visual_gap_starts: tuple[int, ...] = ()
+        self._gap_totals: tuple[int, ...] = ()
+        self._aligned_layout = _AlignedDocumentLayout(self.document())
+        self.document().setDocumentLayout(self._aligned_layout)
         self.side_area = _SideArea(self)
         self.blockCountChanged.connect(self._update_side_width)
         self.updateRequest.connect(self._update_side_area)
@@ -64,11 +109,87 @@ class CodeEditor(QPlainTextEdit):
             self.syntax_language = language
             self.viewport().update()
 
+    def set_placeholder_ranges(self, ranges: tuple[tuple[int, int], ...]):
+        combined: dict[int, int] = {}
+        for start, count in ranges:
+            combined[start] = combined.get(start, 0) + count
+        self.placeholder_ranges = tuple(sorted(combined.items()))
+        starts = []
+        visual_starts = []
+        totals = []
+        total = 0
+        for start, count in self.placeholder_ranges:
+            starts.append(start)
+            visual_starts.append(start + total)
+            total += count
+            totals.append(total)
+        self._gap_starts = tuple(starts)
+        self._visual_gap_starts = tuple(visual_starts)
+        self._gap_totals = tuple(totals)
+        block = self.document().firstBlock()
+        self._aligned_layout.ensureBlockLayout(block)
+        line_height = (block.layout().lineAt(0).height() if block.layout().lineCount()
+                       else self.fontMetrics().height())
+        self._aligned_layout.set_gaps(self.placeholder_ranges, line_height)
+        self.viewport().update()
+        self.side_area.update()
+
+    def visual_row(self, block_number: int) -> int:
+        """Position of a real block in the aligned pair of documents."""
+        index = bisect_right(self._gap_starts, block_number) - 1
+        return block_number + (self._gap_totals[index] if index >= 0 else 0)
+
+    def block_for_visual_row(self, row: int) -> int:
+        index = bisect_right(self._visual_gap_starts, row) - 1
+        if index < 0:
+            return max(0, row)
+        start, count = self.placeholder_ranges[index]
+        if row < self._visual_gap_starts[index] + count:
+            return max(0, start - 1)
+        return max(0, row - self._gap_totals[index])
+
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.syntax_language is None or not self.theme:
+        if not self.theme:
             return
-        self._paint_indent_guides(event)
+        if self.syntax_language is not None:
+            self._paint_indent_guides(event)
+        self._paint_placeholders(event)
+
+    def _paint_placeholders(self, event):
+        if not self.placeholder_ranges:
+            return
+        painter = QPainter(self.viewport())
+        painter.setClipRect(event.rect())
+        line_height = self._aligned_layout.line_height
+        color = QColor(self.theme["muted"])
+        color.setAlpha(65)
+        painter.setPen(QPen(color, 1))
+        width = self.viewport().width()
+        for start, count in self.placeholder_ranges:
+            if start == 0:
+                block = self.document().firstBlock()
+                top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+            else:
+                previous = self.document().findBlockByNumber(start - 1)
+                if not previous.isValid():
+                    continue
+                top = self.blockBoundingGeometry(previous).translated(self.contentOffset()).bottom() - count * line_height
+            bottom = top + count * line_height
+            area = QRectF(0, top, width, bottom - top)
+            if not area.intersects(QRectF(event.rect())):
+                continue
+            painter.save()
+            painter.setClipRect(area, Qt.ClipOperation.IntersectClip)
+            painter.fillRect(area, QColor(self.theme["background"]))
+            visible_top = max(top, event.rect().top())
+            visible_bottom = min(bottom, event.rect().bottom())
+            origin = int(top) - width
+            y = origin + int((visible_top - width - origin) // 10) * 10
+            while y <= visible_bottom:
+                painter.drawLine(0, y, width, y + width)
+                y += 10
+            painter.restore()
 
     def _paint_indent_guides(self, event):
         painter = QPainter(self.viewport())
@@ -82,6 +203,12 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             height = self.blockBoundingRect(block).height()
             if block.isVisible() and top + height >= event.rect().top():
+                text_top = top + (self._aligned_layout.before_first if block.blockNumber() == 0 else 0)
+                text_height = height - self._aligned_layout.after.get(block.blockNumber(), 0)
+                if block.blockNumber() == 0:
+                    text_height -= self._aligned_layout.before_first
+                if block.layout().lineCount():
+                    text_height = min(text_height, block.layout().lineAt(0).height())
                 columns = 0
                 for character in block.text():
                     if character == " ":
@@ -90,13 +217,13 @@ class CodeEditor(QPlainTextEdit):
                         columns += self.tab_width - columns % self.tab_width
                     else:
                         break
-                # Draw on exact indent stops, only while that stop is still
-                # whitespace. A guide at 3.5 columns looks like three spaces.
-                levels = min((columns - 1) // self.indent_width, 32)
+                # Put each guide inside the whitespace cell preceding its
+                # indent stop, never on the first non-whitespace character.
+                levels = min(columns // self.indent_width, 32)
                 for level in range(1, levels + 1):
-                    x = round(self.contentOffset().x() + level * self.indent_width * space_width)
+                    x = round(self.contentOffset().x() + (level * self.indent_width - 0.5) * space_width)
                     if event.rect().left() <= x <= event.rect().right():
-                        painter.drawLine(x, round(top), x, round(top + height))
+                        painter.drawLine(x, round(text_top), x, round(text_top + text_height))
             block = block.next()
             top += height
 
@@ -117,10 +244,14 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             block_height = round(self.blockBoundingRect(block).height())
             if block.isVisible() and top + block_height >= event.rect().top():
+                text_top = top + (self._aligned_layout.before_first if number == 0 else 0)
+                text_height = block_height - self._aligned_layout.after.get(number, 0)
+                if number == 0:
+                    text_height -= self._aligned_layout.before_first
                 painter.setPen(QColor(c["accent"] if number == self.textCursor().blockNumber() else c["muted"]))
                 painter.drawText(
-                    2, top, self.side_width() - 9,
-                    block_height, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    2, round(text_top), self.side_width() - 9,
+                    round(text_height), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     str(number + 1),
                 )
             block = block.next()

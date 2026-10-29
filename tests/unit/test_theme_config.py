@@ -1,4 +1,4 @@
-from diffly.gui.theme import COLOR_KEYS, load_config, save_selected_theme
+from diffly.gui.theme import COLOR_KEYS, load_config, save_indent_width, save_selected_theme
 
 
 def test_bundled_themes_and_toml_override(tmp_path, monkeypatch):
@@ -26,3 +26,21 @@ def test_theme_selection_persists_without_losing_other_settings(tmp_path, monkey
     assert load_config().themes["gruvbox"]["accent"] == "#ffffff"
     save_selected_theme("solarized_dark")
     assert override.read_text().count('theme = "solarized_dark"') == 1
+
+
+def test_indent_width_persists_both_grid_settings(tmp_path, monkeypatch):
+    override = tmp_path / "diffly" / "config.toml"
+    override.parent.mkdir()
+    override.write_text('[settings]\ntheme = "dark"\ntab_width = 4\n\n[themes.gruvbox]\naccent = "#ffffff"\n')
+    monkeypatch.setenv("DIFFLY_CONFIG", str(override))
+
+    save_indent_width(2)
+    customized = load_config()
+    assert customized.settings["tab_width"] == 2
+    assert customized.settings["indent_guide_width"] == 2
+    assert customized.settings["theme"] == "dark"
+    assert customized.themes["gruvbox"]["accent"] == "#ffffff"
+
+    save_indent_width(4)
+    assert override.read_text().count("tab_width = 4") == 1
+    assert override.read_text().count("indent_guide_width = 4") == 1

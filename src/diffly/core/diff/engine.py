@@ -41,12 +41,22 @@ class DiffResult:
 def compare(left: str, right: str, left_revision: int, right_revision: int) -> DiffResult:
     left_lines = left.splitlines(keepends=True)
     right_lines = right.splitlines(keepends=True)
-    matcher = SequenceMatcher(None, left_lines, right_lines, autojunk=False)
+    # Anchor the shared beginning before matching the rest. With repeated
+    # blocks, SequenceMatcher can otherwise pair the right-hand block with a
+    # later, longer match and report identical leading lines as deleted.
+    prefix = 0
+    while (prefix < len(left_lines) and prefix < len(right_lines)
+           and left_lines[prefix] == right_lines[prefix]):
+        prefix += 1
+    matcher = SequenceMatcher(None, left_lines[prefix:], right_lines[prefix:], autojunk=False)
     hunks = []
     left_spans = []
     right_spans = []
-    deleted = added = changed = identical = 0
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    deleted = added = changed = 0
+    identical = prefix
+    for tag, start_left, end_left, start_right, end_right in matcher.get_opcodes():
+        i1, i2 = start_left + prefix, end_left + prefix
+        j1, j2 = start_right + prefix, end_right + prefix
         if tag == "equal":
             identical += i2 - i1
             continue

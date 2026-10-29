@@ -8,6 +8,15 @@ if sys.platform == "darwin":
     import objc
     from diffly.gui.icons import native_icon_png
 
+    def _ns_color(hex_color):
+        value = hex_color.lstrip("#")
+        return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+            int(value[0:2], 16) / 255,
+            int(value[2:4], 16) / 255,
+            int(value[4:6], 16) / 255,
+            1,
+        )
+
     class _DifflyToolbarDelegate(AppKit.NSObject):
         def toolbarAllowedItemIdentifiers_(self, toolbar):
             return list(self.identifiers)
@@ -27,17 +36,59 @@ if sys.platform == "darwin":
             if image is not None:
                 image.setSize_(AppKit.NSMakeSize(24, 24))
                 image.setTemplate_(True)
-                item.setImage_(image)
-            item.setTarget_(self)
-            item.setAction_("activate:")
+            button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 34, 30))
+            button.setTitle_("")
+            button.setToolTip_(action.toolTip())
+            button.setButtonType_(AppKit.NSButtonTypeMomentaryPushIn)
+            button.setBordered_(False)
+            button.setWantsLayer_(True)
+            button.layer().setCornerRadius_(6.0)
+            button.layer().setBorderWidth_(0.0)
+            button.setImagePosition_(AppKit.NSImageOnly)
+            button.setImageScaling_(AppKit.NSImageScaleProportionallyDown)
+            if image is not None:
+                button.setImage_(image)
+            button.setContentTintColor_(self.normal_tint)
+            button.setIdentifier_(identifier)
+            button.setTarget_(self)
+            button.setAction_("activate:")
+            button.setEnabled_(action.isEnabled())
+            tracking = AppKit.NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+                AppKit.NSZeroRect,
+                AppKit.NSTrackingMouseEnteredAndExited
+                | AppKit.NSTrackingActiveInActiveApp
+                | AppKit.NSTrackingInVisibleRect,
+                self,
+                {"identifier": identifier},
+            )
+            button.addTrackingArea_(tracking)
+            item.setView_(button)
+            item.setMinSize_(AppKit.NSMakeSize(34, 30))
+            item.setMaxSize_(AppKit.NSMakeSize(34, 30))
             item.setEnabled_(action.isEnabled())
+            self.buttons[identifier] = button
             self.items[identifier] = item
             return item
 
         def activate_(self, sender):
-            action = self.actions.get(sender.itemIdentifier())
+            action = self.actions.get(sender.identifier())
             if action is not None and action.isEnabled():
                 action.trigger()
+
+        def mouseEntered_(self, event):
+            identifier = event.trackingArea().userInfo()["identifier"]
+            button = self.buttons.get(identifier)
+            if button is not None and button.isEnabled():
+                button.layer().setBorderColor_(self.border_color.CGColor())
+                button.layer().setBorderWidth_(1.0)
+                self.hovered.add(identifier)
+
+        def mouseExited_(self, event):
+            identifier = event.trackingArea().userInfo()["identifier"]
+            button = self.buttons.get(identifier)
+            if button is not None:
+                button.layer().setBorderWidth_(0.0)
+                self.hovered.discard(identifier)
 
         def validateToolbarItem_(self, item):
             action = self.actions.get(item.itemIdentifier())
@@ -82,8 +133,22 @@ class NativeToolbar:
 
     def sync(self):
         for identifier, item in self.delegate.items.items():
-            item.setEnabled_(self.delegate.actions[identifier].isEnabled())
+            enabled = self.delegate.actions[identifier].isEnabled()
+            item.setEnabled_(enabled)
+            button = self.delegate.buttons[identifier]
+            button.setEnabled_(enabled)
+            if not enabled:
+                button.layer().setBorderWidth_(0.0)
+                self.delegate.hovered.discard(identifier)
         self.toolbar.validateVisibleItems()
+
+    def set_theme(self, theme):
+        self.delegate.normal_tint = _ns_color(theme["text"])
+        self.delegate.border_color = _ns_color(theme["border"])
+        for button in self.delegate.buttons.values():
+            button.setContentTintColor_(self.delegate.normal_tint)
+            if button.identifier() in self.delegate.hovered:
+                button.layer().setBorderColor_(self.delegate.border_color.CGColor())
 
     def close(self):
         if self._event_monitor is not None:
@@ -109,6 +174,9 @@ def install_inline_toolbar(qt_window, action_map: dict) -> NativeToolbar | None:
     delegate = _DifflyToolbarDelegate.alloc().init()
     delegate.actions = {identifier: action for identifier, (action, _symbol) in action_map.items()}
     delegate.symbols = {identifier: symbol for identifier, (_action, symbol) in action_map.items()}
+    theme = qt_window.config.themes[qt_window._active_theme_name]
+    delegate.normal_tint = _ns_color(theme["text"])
+    delegate.border_color = _ns_color(theme["border"])
     identifiers = []
     for identifier in action_map:
         if identifiers:
@@ -116,6 +184,8 @@ def install_inline_toolbar(qt_window, action_map: dict) -> NativeToolbar | None:
         identifiers.append(identifier)
     delegate.identifiers = tuple(identifiers)
     delegate.items = {}
+    delegate.buttons = {}
+    delegate.hovered = set()
     toolbar = AppKit.NSToolbar.alloc().initWithIdentifier_("com.diffly.merge")
     toolbar.setDelegate_(delegate)
     toolbar.setAllowsUserCustomization_(False)

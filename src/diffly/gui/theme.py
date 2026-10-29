@@ -3,7 +3,6 @@
 import os
 import re
 import stat
-import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -49,6 +48,17 @@ def user_config_path() -> Path:
 
 def save_selected_theme(name: str) -> None:
     """Persist a theme choice while keeping other TOML settings and sections."""
+    _save_settings({"theme": f'"{name}"'})
+
+
+def save_indent_width(width: int) -> None:
+    """Keep tab stops and indent guides on the same two/four-space grid."""
+    if width not in (2, 4):
+        raise ValueError("Indent width must be 2 or 4")
+    _save_settings({"tab_width": str(width), "indent_guide_width": str(width)})
+
+
+def _save_settings(values: dict[str, str]) -> None:
     path = user_config_path()
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     newline = "\r\n" if "\r\n" in original else "\n"
@@ -63,20 +73,26 @@ def save_selected_theme(name: str) -> None:
                 break
             if section.group(1).strip() == "settings":
                 settings_start = index
-    theme_line = f'theme = "{name}"{newline}'
     if settings_start is None:
         if lines and not lines[-1].endswith(("\n", "\r")):
             lines[-1] += newline
         if lines and lines[-1].strip():
             lines.append(newline)
-        lines.extend((f"[settings]{newline}", theme_line))
+        lines.append(f"[settings]{newline}")
+        lines.extend(f"{key} = {value}{newline}" for key, value in values.items())
     else:
-        for index in range(settings_start + 1, settings_end):
-            if re.match(r"^\s*theme\s*=", lines[index]):
-                lines[index] = theme_line
-                break
-        else:
-            lines.insert(settings_start + 1, theme_line)
+        body = lines[settings_start + 1:settings_end]
+        missing = []
+        for key, value in values.items():
+            replacement = f"{key} = {value}{newline}"
+            for index, line in enumerate(body):
+                if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                    body[index] = replacement
+                    break
+            else:
+                missing.append(replacement)
+        body[0:0] = missing
+        lines[settings_start + 1:settings_end] = body
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     temporary = None
@@ -108,13 +124,12 @@ def apply_theme(app: QApplication, theme: dict):
     if missing:
         raise ValueError(f"Theme is missing colors: {', '.join(missing)}")
     c = theme
-    native_mac_toolbar = sys.platform == "darwin" and app.platformName() == "cocoa"
-    toolbar_style = "" if native_mac_toolbar else f"""
+    toolbar_style = f"""
         QToolBar#DifflyToolbar {{ background: {c['surface']}; border: none;
             spacing: 5px; padding: 5px 8px; }}
         QToolBar#DifflyToolbar QToolButton {{ color: {c['text']}; background: transparent;
             border: 1px solid transparent; border-radius: 6px; padding: 5px 7px; }}
-        QToolBar#DifflyToolbar QToolButton:hover {{ background: {c['button_hover']};
+        QToolBar#DifflyToolbar QToolButton:hover:!disabled {{ background: transparent;
             border-color: {c['border']}; }}
         QToolBar#DifflyToolbar QToolButton:disabled {{ color: {c['muted']}; }}
     """
@@ -123,6 +138,9 @@ def apply_theme(app: QApplication, theme: dict):
         QLabel, QMenuBar, QMenu, QStatusBar {{ color: {c['text']}; background: {c['surface']}; }}
         QLabel#PaneTitle {{ color: {c['text']}; padding: 5px 8px; }}
         QLabel#FileInfo {{ color: {c['muted']}; font-size: 11px; padding: 2px 8px; }}
+        QToolButton#IndentWidthButton {{ color: {c['muted']}; background: transparent;
+            border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }}
+        QToolButton#IndentWidthButton:hover {{ border-color: {c['border']}; }}
         QStatusBar {{ border: none; padding: 2px 6px; }}
         QStatusBar::item {{ border: none; }}
         QMenuBar::item:selected, QMenu::item:selected {{ background: {c['selection']}; }}
