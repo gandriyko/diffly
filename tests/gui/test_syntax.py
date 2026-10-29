@@ -45,3 +45,65 @@ def test_language_detection_and_tokenization():
     _, _, spans = tokenize_document('def x():\n  return "ok"\n', "python", 1)
     assert (0, 0, 3, "keyword") in spans
     assert (0, 4, 5, "function") in spans
+
+
+def _colors(block):
+    return [(item.start, item.length, item.format.foreground().color().name())
+            for item in block.layout().formats()]
+
+
+def test_colors_follow_lines_and_tokens_until_background_result(qtbot):
+    from PySide6.QtGui import QTextCursor
+    from diffly.gui.editor_widget import EditorWidget
+    from diffly.gui.theme import load_config
+
+    pane = EditorWidget()
+    qtbot.addWidget(pane)
+    pane.set_theme(load_config().themes['gruvbox'])
+    pane.load_text('const value = "😀";\n// note\nreturn 42;')
+    pane.highlighter.set_spans(tokenize_document(pane.text(), 'javascript', 1)[2])
+    qtbot.wait(20)
+    document = pane.editor.document()
+    before = _colors(document.findBlockByNumber(2))
+    assert before
+    cursor = QTextCursor(document)
+    cursor.setPosition(0)
+    cursor.insertText('\n')
+    qtbot.wait(20)
+    assert _colors(document.findBlockByNumber(3)) == before
+
+    # Insert before a keyword: its color moves immediately, without a worker.
+    block = document.findBlockByNumber(3)
+    cursor.setPosition(block.position())
+    cursor.insertText('  ')
+    qtbot.wait(20)
+    shifted = _colors(block)
+    assert shifted == [(start + 2, length, color) for start, length, color in before]
+    pane.highlighter.set_spans(tokenize_document(pane.text(), 'javascript', 2)[2])
+    assert _colors(block) == shifted
+
+
+def test_only_changed_syntax_blocks_are_reformatted(qtbot, monkeypatch):
+    from diffly.gui.editor_widget import EditorWidget
+    from diffly.gui.theme import load_config
+
+    pane = EditorWidget()
+    qtbot.addWidget(pane)
+    pane.set_theme(load_config().themes['gruvbox'])
+    pane.load_text('const x = 1;\nconst y = 2;')
+    spans = tokenize_document(pane.text(), 'javascript', 1)[2]
+    pane.highlighter.set_spans(spans)
+    qtbot.wait(20)
+    calls = []
+    original = pane.highlighter.rehighlightBlock
+
+    def record(block):
+        calls.append(block.blockNumber())
+        original(block)
+
+    monkeypatch.setattr(pane.highlighter, 'rehighlightBlock', record)
+    pane.highlighter.set_spans(spans)
+    assert calls == []
+    pane.highlighter.set_spans(())
+    assert calls == [0, 1]
+    assert not _colors(pane.editor.document().firstBlock())
