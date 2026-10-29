@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diffly"
+version = "0.1.0"
+description = "A responsive two-pane text diff and merge editor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6,<7",
+    "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4"]
+
+[project.scripts]
+diffly = "diffly.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+diffly = ["config.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

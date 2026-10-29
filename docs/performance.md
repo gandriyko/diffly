@@ -1,0 +1,5 @@
+# Performance
+
+The diff debounce is 300 ms. The diff and syntax process pools each have one worker; the file I/O pool has two threads. Pending diff futures are cancelled where possible; running comparisons finish in the worker and stale results are rejected by revision checks. The worker computes changed character spans within replaced lines. Lines longer than 4096 characters use a linear common-prefix/common-suffix pass to bound the cost of character matching.
+
+Syntax lexing waits 180 ms after edits, ignores stale revisions, and stops above 2 MB. `QSyntaxHighlighter` still formats on the GUI thread, in batches of 80 changed lines. The MVP has no virtualized file view. `QPlainTextEdit.toPlainText()` and inserting a whole merged document still cost time proportional to file size on the GUI thread. Large-file latency targets need measurement and a later storage/view design before they can be claimed.
