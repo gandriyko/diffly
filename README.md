@@ -63,6 +63,14 @@ Only UTF-8 text files are supported in this MVP. Line endings are retained when 
 
 ## Development
 
+To use the committed `uv.lock` for reproducible development dependencies:
+
+```sh
+uv run --locked --extra dev pytest
+```
+
+Alternatively, install the development dependencies with pip:
+
 ```sh
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest
