@@ -1,5 +1,9 @@
 # Diffly
 
+<img src="docs/images/diffly-json.png" alt="Diffly comparing two JSON files" width="600">
+
+Screenshot using the [JSON example files](tests/fixtures/diff/README.md).
+
 Diffly is a two-pane text comparison and merge editor for macOS and Linux. This repository implements the Phase 1 MVP in [SPEC.md](SPEC.md).
 
 ## Run

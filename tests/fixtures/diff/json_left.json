@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "service": {
+    "name": "diff-demo",
+    "enabled": true,
+    "endpoint": "https://example.test/api/v1",
+    "timeoutMs": 1200,
+    "headers": {
+      "Accept": "application/json",
+      "X-Trace": "off"
+    }
+  },
+  "locales": ["uk-UA", "en-US"],
+  "features": {
+    "search": {"enabled": true, "limit": 20},
+    "export": {"enabled": false, "formats": []},
+    "alerts": {"enabled": true, "channels": ["email"]}
+  },
+  "users": [
+    {"id": 1, "name": "Олена", "roles": ["admin", "editor"]},
+    {"id": 2, "name": "Maksym", "roles": ["viewer"]},
+    {"id": 3, "name": "Iryna", "roles": ["editor"]}
+  ],
+  "empty": null
+}

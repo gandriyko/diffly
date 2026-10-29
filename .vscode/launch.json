@@ -1,0 +1,67 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Diffly",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "diffly",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": []
+    },
+    {
+      "name": "Diffly: Compare two files",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "diffly",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": ["${input:difflyLeft}", "${input:difflyRight}"]
+    },
+    {
+      "name": "Diffly: Python diff fixture",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "diffly",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": ["tests/fixtures/diff/python_left.py", "tests/fixtures/diff/python_right.py"]
+    },
+    {
+      "name": "Diffly: JavaScript diff fixture",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "diffly",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": ["tests/fixtures/diff/javascript_left.js", "tests/fixtures/diff/javascript_right.js"]
+    },
+    {
+      "name": "Diffly: JSON diff fixture",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "diffly",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": ["tests/fixtures/diff/json_left.json", "tests/fixtures/diff/json_right.json"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "difflyLeft",
+      "type": "promptString",
+      "description": "Path to the left file (absolute or relative to the workspace)"
+    },
+    {
+      "id": "difflyRight",
+      "type": "promptString",
+      "description": "Path to the right file (absolute or relative to the workspace)"
+    }
+  ]
+}
