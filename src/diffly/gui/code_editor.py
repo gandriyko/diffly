@@ -66,7 +66,7 @@ class CodeEditor(QPlainTextEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.syntax_language not in ("json", "python") or not self.theme:
+        if self.syntax_language is None or not self.theme:
             return
         self._paint_indent_guides(event)
 

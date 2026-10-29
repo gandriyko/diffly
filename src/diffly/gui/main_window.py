@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self.right.editor.viewport().installEventFilter(self)
         for editor in (self.left, self.right):
             editor.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            editor.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._last_active_side = "left"
         self.left.edited.connect(lambda: self._documents_changed(self.left))
         self.right.edited.connect(lambda: self._documents_changed(self.right))
@@ -80,8 +81,11 @@ class MainWindow(QMainWindow):
         self.shared_scrollbar.hide()
         self.overview = DiffOverview(self.left.editor, self.right.editor, self.shared_scrollbar, root)
         layout.addWidget(self.overview, 1, 2)
-        layout.addWidget(self.left_info, 2, 0)
-        layout.addWidget(self.right_info, 2, 1)
+        self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
+        self.shared_horizontal_scrollbar.installEventFilter(self)
+        layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 2)
+        layout.addWidget(self.left_info, 3, 0)
+        layout.addWidget(self.right_info, 3, 1)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         layout.setRowStretch(1, 1)
@@ -94,6 +98,13 @@ class MainWindow(QMainWindow):
             editor.editor.verticalScrollBar().rangeChanged.connect(self._update_shared_scroll_range)
         self.shared_scrollbar.valueChanged.connect(self._scroll_both)
         self._update_shared_scroll_range()
+        self._syncing_horizontal_scroll = False
+        for editor in (self.left, self.right):
+            bar = editor.editor.horizontalScrollBar()
+            bar.valueChanged.connect(self._scroll_both_horizontal)
+            bar.rangeChanged.connect(self._update_horizontal_scroll_range)
+        self.shared_horizontal_scrollbar.valueChanged.connect(self._scroll_both_horizontal)
+        self._update_horizontal_scroll_range()
         self._make_menu()
         self._make_toolbar()
         self.debounce = QTimer(self)
@@ -265,9 +276,42 @@ class MainWindow(QMainWindow):
         self.shared_scrollbar.setRange(0, max(bar.maximum() for bar in bars))
         self.shared_scrollbar.setPageStep(max(bar.pageStep() for bar in bars))
 
+    def _scroll_both_horizontal(self, value: int):
+        if self._syncing_horizontal_scroll:
+            return
+        self._syncing_horizontal_scroll = True
+        try:
+            self.shared_horizontal_scrollbar.setValue(value)
+            for editor in (self.left, self.right):
+                editor.editor.horizontalScrollBar().setValue(value)
+        finally:
+            self._syncing_horizontal_scroll = False
+
+    def _update_horizontal_scroll_range(self, *_):
+        bars = (self.left.editor.horizontalScrollBar(), self.right.editor.horizontalScrollBar())
+        shared = self.shared_horizontal_scrollbar
+        shared.setRange(0, max(bar.maximum() for bar in bars))
+        shared.setPageStep(min(bar.pageStep() for bar in bars))
+        shared.setSingleStep(bars[0].singleStep())
+        shared.setVisible(shared.maximum() > 0)
+        self._scroll_both_horizontal(shared.value())
+
     def eventFilter(self, watched, event):
-        if watched in (self.left.editor.viewport(), self.right.editor.viewport()) and event.type() == QEvent.Type.Wheel:
-            QApplication.sendEvent(self.shared_scrollbar, event)
+        if (event.type() == QEvent.Type.Wheel
+                and watched in (self.left.editor.viewport(), self.right.editor.viewport(), self.shared_horizontal_scrollbar)):
+            horizontal = (watched is self.shared_horizontal_scrollbar
+                          or abs(event.pixelDelta().x()) > abs(event.pixelDelta().y())
+                          or abs(event.angleDelta().x()) > abs(event.angleDelta().y())
+                          or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            bar = self.shared_horizontal_scrollbar if horizontal else self.shared_scrollbar
+            if horizontal and not event.pixelDelta().isNull():
+                delta = event.pixelDelta().x() or event.pixelDelta().y()
+                bar.setValue(bar.value() - delta)
+                event.accept()
+                return True
+            if watched is bar:
+                return False
+            QApplication.sendEvent(bar, event)
             return True
         if self.toolbar is not None and watched is self.toolbar and event.type() == QEvent.Type.MouseButtonDblClick:
             if self.isMaximized():
@@ -353,9 +397,8 @@ class MainWindow(QMainWindow):
         self._selected_hunk = -1
         self._refresh_toolbar()
         self._refresh_stats()
-        self.left.show_hunks((), True)
-        self.right.show_hunks((), False)
-        self.overview.set_hunks(())
+        # Keep the last colors while the next diff runs. QTextCursor selections
+        # follow edits; actions stay disabled until a current result arrives.
         self._refresh_titles()
         self.debounce.start()
         if hasattr(self, "_syntax_timers"):
@@ -572,5 +615,8 @@ class MainWindow(QMainWindow):
                 return
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.close()
+        self.debounce.stop()
+        for timer in self._syntax_timers.values():
+            timer.stop()
         self.scheduler.shutdown()
         event.accept()
