@@ -9,6 +9,7 @@ from diffly.gui.main_window import MainWindow
 def test_shared_horizontal_scroll_and_range_changes(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.resize(700, 350)
     window.show()
@@ -56,6 +57,7 @@ def test_shared_horizontal_scroll_and_range_changes(qtbot, monkeypatch):
 def test_diff_colors_remain_until_current_result_arrives(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.load_text('const left = 1;')
     window.right.load_text('const right = 2;')

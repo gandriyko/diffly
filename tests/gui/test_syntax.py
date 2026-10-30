@@ -9,6 +9,7 @@ from diffly.gui.main_window import MainWindow
 def test_json_and_python_highlighting_arrive_from_background(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.state.path = Path("sample.json")
     window.right.state.path = Path("sample.py")
@@ -26,6 +27,7 @@ def test_json_and_python_highlighting_arrive_from_background(qtbot, monkeypatch)
 
 def test_stale_syntax_result_is_ignored(qtbot):
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.state.path = Path("a.json")
     window.left.load_text('{"a": 1}')

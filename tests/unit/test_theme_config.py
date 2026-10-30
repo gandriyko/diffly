@@ -1,4 +1,4 @@
-from diffly.gui.theme import COLOR_KEYS, load_config, save_indent_width, save_selected_theme
+from diffly.gui.theme import COLOR_KEYS, load_config, save_ignore_patterns, save_indent_width, save_selected_theme
 
 
 def test_bundled_themes_and_toml_override(tmp_path, monkeypatch):
@@ -44,3 +44,14 @@ def test_indent_width_persists_both_grid_settings(tmp_path, monkeypatch):
     save_indent_width(4)
     assert override.read_text().count("tab_width = 4") == 1
     assert override.read_text().count("indent_guide_width = 4") == 1
+
+
+def test_directory_ignore_masks_persist_without_replacing_other_settings(tmp_path, monkeypatch):
+    override = tmp_path / "config.toml"
+    override.write_text('[settings]\ntheme = "dark"\n[themes.gruvbox]\naccent = "#ffffff"\n')
+    monkeypatch.setenv("DIFFLY_CONFIG", str(override))
+    save_ignore_patterns(["*.log", "node_modules", "*.log"])
+    config = load_config()
+    assert config.settings["ignore_patterns"] == ["*.log", "node_modules"]
+    assert config.settings["theme"] == "dark"
+    assert config.themes["gruvbox"]["accent"] == "#ffffff"

@@ -133,10 +133,13 @@ class NativeToolbar:
 
     def sync(self):
         for identifier, item in self.delegate.items.items():
-            enabled = self.delegate.actions[identifier].isEnabled()
+            action = self.delegate.actions[identifier]
+            enabled = action.isEnabled()
             item.setEnabled_(enabled)
+            item.setToolTip_(action.toolTip())
             button = self.delegate.buttons[identifier]
             button.setEnabled_(enabled)
+            button.setToolTip_(action.toolTip())
             if not enabled:
                 button.layer().setBorderWidth_(0.0)
                 self.delegate.hovered.discard(identifier)

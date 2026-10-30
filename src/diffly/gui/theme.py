@@ -1,5 +1,6 @@
 """Load bundled themes and an optional user TOML override."""
 
+import json
 import os
 import re
 import stat
@@ -56,6 +57,12 @@ def save_indent_width(width: int) -> None:
     if width not in (2, 4):
         raise ValueError("Indent width must be 2 or 4")
     _save_settings({"tab_width": str(width), "indent_guide_width": str(width)})
+
+
+def save_ignore_patterns(patterns: list[str]) -> None:
+    """Persist directory ignore masks without replacing other settings."""
+    unique = list(dict.fromkeys(pattern.strip() for pattern in patterns if pattern.strip()))
+    _save_settings({"ignore_patterns": json.dumps(unique, ensure_ascii=False)})
 
 
 def _save_settings(values: dict[str, str]) -> None:
@@ -146,6 +153,28 @@ def apply_theme(app: QApplication, theme: dict):
             border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }}
         QToolButton#IndentWidthButton:hover, QToolButton#EncodingButton:hover {{ border-color: {c['border']}; }}
         QToolButton#EncodingButton::menu-indicator {{ image: none; width: 0px; }}
+        QToolButton#DirectoryBrowseButton {{ background: {c['button']};
+            border: 1px solid {c['border']}; border-radius: 4px; }}
+        QToolButton#DirectoryBrowseButton:hover {{ background: {c['button_hover']}; }}
+        QTabWidget#ComparisonTabs::pane {{ border: none; }}
+        QTabBar::tab {{ color: {c['muted']}; background: {c['surface']};
+            border: none; border-bottom: 2px solid transparent; padding: 7px 18px; }}
+        QTabBar::tab:selected {{ color: {c['text']}; border-bottom-color: {c['accent']}; }}
+        QTabBar::tab:hover {{ color: {c['text']}; }}
+        QTreeWidget {{ color: {c['text']}; background: {c['background']};
+            alternate-background-color: {c['surface']}; border: 1px solid {c['border']}; }}
+        QTreeWidget::item:selected {{ background: {c['selection']}; }}
+        QDialog {{ color: {c['text']}; background: {c['surface']}; }}
+        QListWidget {{ color: {c['text']}; background: {c['background']};
+            border: 1px solid {c['border']}; }}
+        QListWidget::item:selected {{ background: {c['selection']}; }}
+        QHeaderView::section {{ color: {c['text']}; background: {c['surface']};
+            border: none; border-bottom: 1px solid {c['border']}; padding: 5px; }}
+        QLineEdit {{ color: {c['text']}; background: {c['background']};
+            border: 1px solid {c['border']}; border-radius: 4px; padding: 5px; }}
+        QPushButton {{ color: {c['text']}; background: {c['button']};
+            border: 1px solid {c['border']}; border-radius: 4px; padding: 5px 9px; }}
+        QPushButton:hover {{ background: {c['button_hover']}; }}
         QStatusBar {{ border: none; padding: 2px 6px; }}
         QStatusBar::item {{ border: none; }}
         QMenuBar::item:selected, QMenu::item:selected {{ background: {c['selection']}; }}

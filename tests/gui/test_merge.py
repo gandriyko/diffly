@@ -9,6 +9,7 @@ from diffly.gui.main_window import MainWindow
 def test_transfer_is_one_undo_step(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.load_text("one\nleft\n")
     window.right.load_text("one\nright\n")
@@ -24,6 +25,7 @@ def test_transfer_is_one_undo_step(qtbot, monkeypatch):
 def test_background_diff_rejects_stale_result(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.load_text("old\n")
     window.right.load_text("other\n")
@@ -39,6 +41,7 @@ def test_background_diff_rejects_stale_result(qtbot, monkeypatch):
 
 def test_internal_placeholder_aligns_matching_lines_without_editing_text(qtbot):
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     left = "a\nb\nextra one\nextra two\nc\nd\n"
@@ -62,6 +65,7 @@ def test_internal_placeholder_aligns_matching_lines_without_editing_text(qtbot):
 def test_click_changed_line_selects_diff_for_toolbar(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     window.left.load_text("a\nleft\nz\n")
@@ -83,6 +87,7 @@ def test_click_changed_line_selects_diff_for_toolbar(qtbot, monkeypatch):
 def test_ctrl_alt_arrows_navigate_and_apply_differences(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     window.activateWindow()
@@ -115,6 +120,7 @@ def test_open_paths_loads_both_panes_in_background(qtbot, tmp_path):
     left.write_text("left\n")
     right.write_text("right\n")
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.open_path(window.left, left)
     window.open_path(window.right, right)
@@ -127,6 +133,7 @@ def test_open_paths_loads_both_panes_in_background(qtbot, tmp_path):
 def test_toolbar_applies_selected_diff_and_has_right_overview(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     window.left.load_text("same\nleft\n")
@@ -148,6 +155,7 @@ def test_toolbar_applies_selected_diff_and_has_right_overview(qtbot, monkeypatch
 
 def test_double_click_on_toolbar_zooms_without_fullscreen(qtbot):
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     qtbot.mouseDClick(window.toolbar, Qt.MouseButton.LeftButton, pos=QPoint(500, window.toolbar.height() // 2))
@@ -162,13 +170,14 @@ def test_linux_toolbar_shares_title_row_with_menu_and_window_controls(qtbot, mon
 
     monkeypatch.setattr(main_window, "sys", SimpleNamespace(platform="linux"))
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.show()
     header = window._linux_titlebar
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert window.menuWidget() is header
     assert window.toolbar.parent() is header
-    assert [action.text() for action in header.menu_bar.actions()] == ["File", "Edit", "Theme"]
+    assert [action.text() for action in header.menu_bar.actions()] == ["File", "Edit", "Theme", "Settings"]
     window.setWindowTitle("Left ↔ Right — Diffly")
     assert header.title.text() == "Left ↔ Right — Diffly"
     maximize = next(button for button in header.findChildren(type(window.tab_label))
@@ -183,25 +192,28 @@ def test_linux_toolbar_shares_title_row_with_menu_and_window_controls(qtbot, mon
 
 def test_compact_layout_and_status_information(qtbot):
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.left.load_text("same\nleft\n")
     window.right.load_text("same\nright\n")
     window._accept_diff(compare(window.left.text(), window.right.text(), window.left.state.revision, window.right.state.revision))
     window.show()
-    assert window.centralWidget().layout().contentsMargins().left() == 0
-    assert window.centralWidget().layout().horizontalSpacing() == 1
+    assert window.tabs.count() == 2
+    assert window.file_comparison.layout().contentsMargins().left() == 0
+    assert window.file_comparison.layout().horizontalSpacing() == 1
     assert "1 changed" in window.summary_label.text()
     assert "1 identical" in window.summary_label.text()
     width = max(1, int(window.config.settings.get("tab_width", 4)))
     assert window.tab_label.text() == f"Tab: {width} spaces"
     assert "UTF-8" in window.encoding_label.text()
-    assert window.centralWidget().layout().rowCount() == 3
+    assert window.file_comparison.layout().rowCount() == 3
     window.close()
 
 
 def test_right_overview_controls_both_panes(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
     qtbot.addWidget(window)
     window.resize(700, 350)
     window.show()

@@ -1,8 +1,8 @@
 # Visual diff fixtures
 
-Open a pair with the matching **Diffly: … diff fixture** configuration in
-`.vscode/launch.json`. The files are valid examples for manual comparison and
-merge checks; they are not expected-output snapshots.
+Open a pair by passing its paths to `.venv/bin/python -m diffly` from the
+repository root. The files are valid examples for manual comparison and merge
+checks; they are not expected-output snapshots.
 
 - **Python:** repeated event lines, a new dataclass field and function argument,
   Unicode normalization, filtering, and changes in several separated blocks.
