@@ -34,7 +34,7 @@ scripts/build-macos-app.sh
 open dist
 ```
 
-Drag `Diffly.app` from the opened `dist` folder into Applications in Finder. The build includes Python, Qt, and the bundled theme configuration, so the `.app` does not depend on this repository or its virtual environment. Run the build again after code changes and replace the copy in Applications. The app is built for the current Mac's CPU architecture and is signed locally; distributing it to other Macs requires Developer ID signing and notarization.
+When run in a terminal, the script asks whether to install the app; answering `y` replaces `/Applications/Diffly.app` with the new build. Otherwise, drag `Diffly.app` from the opened `dist` folder into Applications in Finder. The build includes Python, Qt, and the bundled theme configuration, so the `.app` does not depend on this repository or its virtual environment. Run the build again after code changes and replace the copy in Applications. The app is built for the current Mac's CPU architecture and is signed locally; distributing it to other Macs requires Developer ID signing and notarization.
 
 Open one or two files directly from the command line:
 

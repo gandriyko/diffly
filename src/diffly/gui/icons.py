@@ -17,9 +17,10 @@ def _pixmap(kind: str, color: str) -> QPixmap:
     painter.setPen(pen)
 
     if kind == "refresh":
-        painter.drawArc(QRectF(4, 4, 16, 16), 35 * 16, 290 * 16)
-        painter.drawLine(QPointF(18.8, 9.8), QPointF(19.8, 14.1))
-        painter.drawLine(QPointF(19.8, 14.1), QPointF(15.5, 13.2))
+        # Clockwise arc with a gap at the upper right; the chevron sits on the arc's top end.
+        painter.drawArc(QRectF(4.5, 5.5, 15, 15), 90 * 16, 300 * 16)
+        painter.drawLine(QPointF(9.5, 2.5), QPointF(12.5, 5.5))
+        painter.drawLine(QPointF(12.5, 5.5), QPointF(9.5, 8.5))
     elif kind in ("up", "down"):
         if kind == "up":
             points = ((12, 19), (12, 5), (6, 11), (12, 5), (18, 11))
