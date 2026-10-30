@@ -1,5 +1,5 @@
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialog, QMessageBox, QToolButton
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QToolButton
 
 from diffly.gui.ignore_patterns_dialog import IgnorePatternsDialog
 from diffly.gui.main_window import MainWindow
@@ -115,4 +115,34 @@ def test_directory_toolbar_navigates_and_copies_with_session_confirmation(qtbot,
     assert (right / "sub" / "b.bin").read_bytes() == b"\x00\xff"
     assert len(calls) == 2
     assert window._skip_copy_confirmation
+    window.close()
+
+
+def test_directory_selection_enter_and_toolbar_refresh(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setenv("DIFFLY_CONFIG", str(tmp_path / "config.toml"))
+    left, right = tmp_path / "left", tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "one.txt").write_text("left")
+    (right / "one.txt").write_text("right")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    view = window.directory_comparison
+    assert not hasattr(view, "compare_button")
+    assert window.toolbar.actions()[0] is window.refresh_action
+    choices = iter((str(left), str(right)))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args: next(choices))
+    view._browse(view.left_path)
+    assert not view._entries
+    view._browse(view.right_path)
+    qtbot.waitUntil(lambda: view._entries.get("one.txt") is not None)
+    assert view._entries["one.txt"].status == "different"
+
+    (right / "one.txt").write_text("left")
+    window.refresh_action.trigger()
+    qtbot.waitUntil(lambda: view._entries.get("one.txt") is not None and view._entries["one.txt"].status == "same")
+    (right / "one.txt").write_text("new")
+    view.right_path.returnPressed.emit()
+    qtbot.waitUntil(lambda: view._entries.get("one.txt") is not None and view._entries["one.txt"].status == "different")
     window.close()

@@ -6,7 +6,7 @@ from threading import Event
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QSplitter, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -41,13 +41,8 @@ class DirectoryComparisonView(QWidget):
         layout.setSpacing(7)
         self.left_path = QLineEdit(self)
         self.right_path = QLineEdit(self)
-        controls = QHBoxLayout()
-        self.compare_button = QPushButton("Compare directories", self)
-        self.compare_button.clicked.connect(self.compare)
-        controls.addWidget(self.compare_button)
         self.summary = QLabel("Choose two directories to compare", self)
-        controls.addWidget(self.summary, 1)
-        layout.addLayout(controls)
+        layout.addWidget(self.summary)
 
         self.left_tree = self._make_tree("Left")
         self.right_tree = self._make_tree("Right")
@@ -79,6 +74,7 @@ class DirectoryComparisonView(QWidget):
         field.setPlaceholderText(f"{side.title()} directory…")
         field.setToolTip(f"Path to the {side} directory")
         field.textChanged.connect(self._paths_edited)
+        field.returnPressed.connect(self.compare)
         row.addWidget(field, 1)
         browse = QToolButton(pane)
         browse.setObjectName("DirectoryBrowseButton")
@@ -106,7 +102,8 @@ class DirectoryComparisonView(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Choose directory", field.text() or str(Path.home()))
         if path:
             field.setText(path)
-            self._paths_edited()
+            if self.left_path.text().strip() and self.right_path.text().strip():
+                self.compare()
 
     def _paths_edited(self, *_):
         self.cancel()
@@ -117,7 +114,7 @@ class DirectoryComparisonView(QWidget):
         self._navigable_paths.clear()
         self._selected_path = None
         self.selection_changed.emit()
-        self.summary.setText("Click Compare directories to scan")
+        self.summary.setText("Press Enter in a directory path or use Refresh to compare")
 
     def set_patterns(self, patterns: list[str]):
         self.patterns = list(patterns)
@@ -134,7 +131,6 @@ class DirectoryComparisonView(QWidget):
         if self._cancel is not None:
             self._cancel.set()
             self._cancel = None
-        self.compare_button.setEnabled(True)
 
     def compare(self):
         left_text = self.left_path.text().strip()
@@ -154,21 +150,18 @@ class DirectoryComparisonView(QWidget):
         self._navigable_paths.clear()
         self._selected_path = None
         self.selection_changed.emit()
-        self.compare_button.setEnabled(False)
         self.summary.setText("Comparing directories…")
 
         def done(entries):
             if generation != self._generation:
                 return
             self._cancel = None
-            self.compare_button.setEnabled(True)
             self._populate(entries, previous_selection)
 
         def failed(message):
             if generation != self._generation:
                 return
             self._cancel = None
-            self.compare_button.setEnabled(True)
             self.summary.setText(f"Comparison failed: {message}")
 
         self.scheduler.submit_file(

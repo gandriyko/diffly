@@ -246,6 +246,10 @@ class MainWindow(QMainWindow):
             self._toolbar_icons[action] = icon_kind
             return action
 
+        self.refresh_action = add("Refresh", "refresh", "Refresh directory comparison", self._refresh_current)
+        spacer = QWidget(toolbar)
+        spacer.setFixedWidth(12)
+        toolbar.addWidget(spacer)
         self.previous_action = add("Previous", "up", f"Previous difference ({modifier}+Up)", lambda: self._navigate(-1))
         self.next_action = add("Next", "down", f"Next difference ({modifier}+Down)", lambda: self._navigate(1))
         spacer = QWidget(toolbar)
@@ -271,6 +275,8 @@ class MainWindow(QMainWindow):
         if not files_active:
             view = self.directory_comparison
             active = not self._directory_copy_busy
+            self.refresh_action.setEnabled(active and bool(view.left_path.text().strip()) and bool(view.right_path.text().strip()))
+            self.refresh_action.setToolTip("Refresh directory comparison")
             self.previous_action.setEnabled(active and view.has_navigable_files())
             self.next_action.setEnabled(active and view.has_navigable_files())
             self.apply_left_action.setEnabled(active and view.can_copy(True))
@@ -287,6 +293,8 @@ class MainWindow(QMainWindow):
                 self._native_toolbar_bridge.sync()
             return
         has_hunks = files_active and self._diff is not None and bool(self._diff.hunks)
+        self.refresh_action.setEnabled(not self._busy_files)
+        self.refresh_action.setToolTip("Reload open files from disk and compare")
         selected = has_hunks and 0 <= self._selected_hunk < len(self._diff.hunks)
         self.previous_action.setEnabled(has_hunks)
         self.next_action.setEnabled(has_hunks)
@@ -353,6 +361,23 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.file_comparison)
         self.open_path(self.left, left)
         self.open_path(self.right, right)
+
+    def _refresh_current(self):
+        if self.tabs.currentWidget() is self.directory_comparison:
+            if not self._directory_copy_busy:
+                self.directory_comparison.compare()
+            return
+        if self._busy_files:
+            return
+        loaded = [editor for editor in (self.left, self.right) if editor.state.path is not None]
+        if not all(self._confirm_discard(editor) for editor in loaded):
+            return
+        if not loaded:
+            self.debounce.stop()
+            self._request_diff()
+            return
+        for editor in loaded:
+            self.open_path(editor, editor.state.path)
 
     def _tab_changed(self, index: int):
         files_active = self.tabs.widget(index) is self.file_comparison
@@ -490,6 +515,7 @@ class MainWindow(QMainWindow):
         if self._native_toolbar_bridge is not None:
             return
         actions = {
+            "diffly.refresh": (self.refresh_action, "refresh"),
             "diffly.previous": (self.previous_action, "up"),
             "diffly.next": (self.next_action, "down"),
             "diffly.apply_left": (self.apply_left_action, "apply_left"),
@@ -786,12 +812,14 @@ class MainWindow(QMainWindow):
             return
         revision = editor.state.revision
         self._busy_files.add(id(editor))
+        self._refresh_toolbar()
         self.statusBar().showMessage(f"Opening {path.name}…")
         self._serial += 1
         key = self._serial
 
         def done(loaded):
             self._busy_files.discard(id(editor))
+            self._refresh_toolbar()
             if editor.state.revision != revision:
                 self.statusBar().showMessage("Open discarded because the pane changed")
                 return
@@ -808,6 +836,7 @@ class MainWindow(QMainWindow):
 
         def failed(message):
             self._busy_files.discard(id(editor))
+            self._refresh_toolbar()
             QMessageBox.critical(self, "Open failed", message)
 
         self.scheduler.submit_file(key, read_file, (path, encoding), done, failed)
@@ -840,12 +869,14 @@ class MainWindow(QMainWindow):
         bom = editor.state.bom
         encoding = editor.state.encoding
         self._busy_files.add(id(editor))
+        self._refresh_toolbar()
         self.statusBar().showMessage(f"Saving {path.name}…")
         self._serial += 1
         key = self._serial
 
         def done(stamp):
             self._busy_files.discard(id(editor))
+            self._refresh_toolbar()
             editor.state.path = path
             editor.state.stamp = stamp
             editor.state.saved_revision = revision
@@ -856,6 +887,7 @@ class MainWindow(QMainWindow):
 
         def failed(message):
             self._busy_files.discard(id(editor))
+            self._refresh_toolbar()
             QMessageBox.critical(self, "Save failed", message)
 
         self.scheduler.submit_file(key, write_file, (path, text, newline, bom, expected, encoding), done, failed)
