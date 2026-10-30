@@ -22,6 +22,7 @@ from diffly.core.documents.syntax import language_for
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.editor_widget import EditorWidget
 from diffly.gui.icons import toolbar_icon
+from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.theme import apply_theme, editor_font, load_config, save_indent_width, save_selected_theme
 from diffly.platform.macos import install_inline_toolbar
 from diffly.services.file_service import file_stamp, read_file, write_file
@@ -39,6 +40,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Diffly")
         self.resize(1100, 720)
+        self._linux_titlebar = None
+        if sys.platform.startswith("linux"):
+            self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+            self._linux_titlebar = LinuxTitleBar(self)
+            self.setMenuWidget(self._linux_titlebar)
         self.scheduler = TaskScheduler(self)
         self.scheduler.diff_ready.connect(self._accept_diff)
         self.scheduler.diff_failed.connect(self._diff_error)
@@ -147,7 +153,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Open a file in each pane to compare")
 
     def _make_menu(self):
-        file_menu = self.menuBar().addMenu("File")
+        menu_bar = self._linux_titlebar.menu_bar if self._linux_titlebar is not None else self.menuBar()
+        file_menu = menu_bar.addMenu("File")
         for label, shortcut, callback in (
             ("Open Left…", "Ctrl+O", lambda: self._open(self.left)),
             ("Open Right…", "Ctrl+Shift+O", lambda: self._open(self.right)),
@@ -161,7 +168,7 @@ class MainWindow(QMainWindow):
                 action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             file_menu.addAction(action)
-        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu = menu_bar.addMenu("Edit")
         for label, shortcut, operation in (
             ("Undo", "Ctrl+Z", "undo"),
             ("Redo", "Ctrl+Shift+Z", "redo"),
@@ -183,7 +190,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(callback)
             edit_menu.addAction(action)
 
-        theme_menu = self.menuBar().addMenu("Theme")
+        theme_menu = menu_bar.addMenu("Theme")
         group = QActionGroup(self)
         group.setExclusive(True)
         for key, theme in self.config.themes.items():
@@ -197,13 +204,16 @@ class MainWindow(QMainWindow):
 
     def _make_toolbar(self):
         modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
-        toolbar = QToolBar("Diff controls", self)
+        toolbar = QToolBar("Diff controls", self._linux_titlebar or self)
         toolbar.setObjectName("DifflyToolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
         toolbar.setIconSize(QSize(20, 20))
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        if self._linux_titlebar is None:
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        else:
+            self._linux_titlebar.add_toolbar(toolbar)
 
         self._toolbar_icons = {}
 

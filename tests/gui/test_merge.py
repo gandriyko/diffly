@@ -156,6 +156,31 @@ def test_double_click_on_toolbar_zooms_without_fullscreen(qtbot):
     window.close()
 
 
+def test_linux_toolbar_shares_title_row_with_menu_and_window_controls(qtbot, monkeypatch):
+    import diffly.gui.main_window as main_window
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(main_window, "sys", SimpleNamespace(platform="linux"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    header = window._linux_titlebar
+    assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert window.menuWidget() is header
+    assert window.toolbar.parent() is header
+    assert [action.text() for action in header.menu_bar.actions()] == ["File", "Edit", "Theme"]
+    window.setWindowTitle("Left ↔ Right — Diffly")
+    assert header.title.text() == "Left ↔ Right — Diffly"
+    maximize = next(button for button in header.findChildren(type(window.tab_label))
+                    if button.toolTip() == "Maximize or restore")
+    qtbot.mouseClick(maximize, Qt.MouseButton.LeftButton)
+    assert window.isMaximized()
+    qtbot.mouseClick(maximize, Qt.MouseButton.LeftButton)
+    assert not window.isMaximized()
+    assert window.statusBar().isSizeGripEnabled()
+    window.close()
+
+
 def test_compact_layout_and_status_information(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)

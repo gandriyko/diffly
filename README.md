@@ -51,6 +51,8 @@ The toolbar at the top navigates between differences, applies the selected block
 
 On macOS, Diffly sets the native toolbar to the compact inline titlebar style. The editors use the full width of the window. The status bar shows deleted, added, changed, and identical line counts. Next to **Tab: 2/4 spaces**, the **Encoding** button shows the active pane's encoding. Its menu lists **Auto** and the available encodings. Choosing one reopens an existing file with that encoding; for an untitled pane it sets the encoding used when saving. Click **Tab: 2/4 spaces** to switch tab stops and indent guides; the choice is saved in the user TOML config. A double-click on an empty part of the Qt toolbar toggles a maximized window without entering fullscreen. A double-click on the empty title area also toggles a maximized window without entering fullscreen.
 
+On Linux, Diffly draws its own title bar so the menu, diff toolbar, window title, and window controls share one row. Drag the title to move the window, double-click it to maximize or restore, and use the bottom-right size grip to resize.
+
 When run from a terminal, **Ctrl+C** closes Diffly through the usual unsaved-changes check.
 
 On macOS, press **Command+Option+Down** for the next difference and **Command+Option+Up** for the previous one. **Command+Option+Left/Right** applies the selected difference toward the arrow. On Linux, use **Ctrl+Alt** with the same arrow keys. Navigation moves the text cursor to the changed line in the active editor. **Command+Option+Delete** on macOS or **Ctrl+Alt+Delete** on Linux deletes the selected block from the active editor. Plain arrow and Delete keys retain their usual text-editing behavior inside an editor.

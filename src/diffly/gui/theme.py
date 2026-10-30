@@ -137,6 +137,11 @@ def apply_theme(app: QApplication, theme: dict):
         QMainWindow, QWidget#DifflyRoot {{ background: {c['surface']}; color: {c['text']}; }}
         QLabel, QMenuBar, QMenu, QStatusBar {{ color: {c['text']}; background: {c['surface']}; }}
         QLabel#PaneTitle {{ color: {c['text']}; padding: 5px 8px; }}
+        QWidget#LinuxTitleBar {{ background: {c['surface']}; border-bottom: 1px solid {c['border']}; }}
+        QLabel#LinuxWindowTitle {{ color: {c['muted']}; padding: 0 8px; }}
+        QToolButton#LinuxWindowButton {{ color: {c['text']}; background: transparent;
+            border: 1px solid transparent; border-radius: 5px; }}
+        QToolButton#LinuxWindowButton:hover {{ border-color: {c['border']}; }}
         QToolButton#IndentWidthButton, QToolButton#EncodingButton {{ color: {c['muted']}; background: transparent;
             border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }}
         QToolButton#IndentWidthButton:hover, QToolButton#EncodingButton:hover {{ border-color: {c['border']}; }}
