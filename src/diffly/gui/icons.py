@@ -25,39 +25,38 @@ def _pixmap(kind: str, color: str) -> QPixmap:
         painter.drawLine(QPointF(*points[2]), QPointF(*points[3]))
         painter.drawLine(QPointF(*points[3]), QPointF(*points[4]))
     elif kind == "paste":
-        # Two overlapping sheets: the back sheet's hidden edges are omitted
-        # so the icon remains clear as a monochrome macOS template image.
-        painter.drawLine(QPointF(9, 7), QPointF(9, 4.5))
-        painter.drawLine(QPointF(9, 4.5), QPointF(10.5, 3))
-        painter.drawLine(QPointF(10.5, 3), QPointF(19, 3))
-        painter.drawLine(QPointF(19, 3), QPointF(20.5, 4.5))
-        painter.drawLine(QPointF(20.5, 4.5), QPointF(20.5, 16.5))
-        painter.drawLine(QPointF(20.5, 16.5), QPointF(16, 16.5))
-        painter.drawRoundedRect(QRectF(3.5, 7, 12.5, 15), 1.5, 1.5)
+        # A clipboard silhouette distinguishes Paste from the Copy sheets icon.
+        painter.drawRoundedRect(QRectF(4, 5, 16, 17), 2, 2)
+        painter.drawRoundedRect(QRectF(9, 2.5, 6, 5), 1.2, 1.2)
+        painter.drawLine(QPointF(8, 11), QPointF(16, 11))
+        painter.drawLine(QPointF(8, 15), QPointF(16, 15))
+        painter.drawLine(QPointF(8, 19), QPointF(13, 19))
+    elif kind in ("apply_left", "apply_right"):
+        # A full-width arrow keeps the destination clear at toolbar size.
+        arrow_pen = QPen(ink, 2.2)
+        arrow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        arrow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(arrow_pen)
+        if kind == "apply_left":
+            painter.drawLine(QPointF(20, 12), QPointF(4, 12))
+            painter.drawLine(QPointF(10, 6), QPointF(4, 12))
+            painter.drawLine(QPointF(4, 12), QPointF(10, 18))
+        else:
+            painter.drawLine(QPointF(4, 12), QPointF(20, 12))
+            painter.drawLine(QPointF(14, 6), QPointF(20, 12))
+            painter.drawLine(QPointF(20, 12), QPointF(14, 18))
     else:
-        left = QRectF(2.5, 4.5, 7, 15)
-        right = QRectF(14.5, 4.5, 7, 15)
         target_left = kind.endswith("left")
         frame_color = QColor(ink)
         frame_color.setAlpha(135)
         painter.setPen(QPen(frame_color, 1.5))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(left, 1.5, 1.5)
-        painter.drawRoundedRect(right, 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(2.5, 4.5, 7, 15), 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(14.5, 4.5, 7, 15), 1.5, 1.5)
         painter.setPen(pen)
-        if kind.startswith("apply"):
-            if target_left:
-                painter.drawLine(QPointF(18, 12), QPointF(5, 12))
-                painter.drawLine(QPointF(10, 8), QPointF(5, 12))
-                painter.drawLine(QPointF(10, 16), QPointF(5, 12))
-            else:
-                painter.drawLine(QPointF(6, 12), QPointF(19, 12))
-                painter.drawLine(QPointF(14, 8), QPointF(19, 12))
-                painter.drawLine(QPointF(14, 16), QPointF(19, 12))
-        elif kind.startswith("delete"):
-            center = 6 if target_left else 18
-            painter.drawLine(QPointF(center - 2, 10), QPointF(center + 2, 14))
-            painter.drawLine(QPointF(center + 2, 10), QPointF(center - 2, 14))
+        center = 6 if target_left else 18
+        painter.drawLine(QPointF(center - 2, 10), QPointF(center + 2, 14))
+        painter.drawLine(QPointF(center + 2, 10), QPointF(center - 2, 14))
     painter.end()
     return pixmap
 
