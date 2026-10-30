@@ -169,7 +169,8 @@ def test_compact_layout_and_status_information(qtbot):
     assert "1 identical" in window.summary_label.text()
     width = max(1, int(window.config.settings.get("tab_width", 4)))
     assert window.tab_label.text() == f"Tab: {width} spaces"
-    assert "UTF-8" in window.left_info.text()
+    assert "UTF-8" in window.encoding_label.text()
+    assert window.centralWidget().layout().rowCount() == 3
     window.close()
 
 

@@ -1,5 +1,4 @@
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, QTimer, Qt
@@ -11,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QScrollBar,
     QToolBar,
     QToolButton,
@@ -26,6 +26,12 @@ from diffly.gui.theme import apply_theme, editor_font, load_config, save_indent_
 from diffly.platform.macos import install_inline_toolbar
 from diffly.services.file_service import file_stamp, read_file, write_file
 from diffly.services.task_scheduler import TaskScheduler
+
+
+ENCODINGS = (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
+             ("UTF-16 BE", "utf-16-be"), ("Windows-1251", "cp1251"),
+             ("Windows-1252", "cp1252"), ("ISO-8859-1", "iso8859-1"),
+             ("Windows-1250", "cp1250"), ("Shift JIS", "shift_jis"))
 
 
 class MainWindow(QMainWindow):
@@ -63,11 +69,6 @@ class MainWindow(QMainWindow):
         self.right_title = QLabel()
         self.left_title.setObjectName("PaneTitle")
         self.right_title.setObjectName("PaneTitle")
-        self.left_info = QLabel()
-        self.right_info = QLabel()
-        for info in (self.left_info, self.right_info):
-            info.setObjectName("FileInfo")
-            info.setAlignment(Qt.AlignmentFlag.AlignRight)
         root = QWidget()
         root.setObjectName("DifflyRoot")
         layout = QGridLayout(root)
@@ -85,8 +86,6 @@ class MainWindow(QMainWindow):
         self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
         self.shared_horizontal_scrollbar.installEventFilter(self)
         layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 2)
-        layout.addWidget(self.left_info, 3, 0)
-        layout.addWidget(self.right_info, 3, 1)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         layout.setRowStretch(1, 1)
@@ -126,7 +125,19 @@ class MainWindow(QMainWindow):
         self.tab_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tab_label.setToolTip("Switch tab stops and indent guides between 2 and 4 spaces")
         self.tab_label.clicked.connect(self._toggle_indent_width)
+        self.encoding_label = QToolButton()
+        self.encoding_label.setObjectName("EncodingButton")
+        self.encoding_label.setAutoRaise(True)
+        self.encoding_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.encoding_label.setToolTip("Encoding of the active pane")
+        self.encoding_label.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        encoding_menu = QMenu(self.encoding_label)
+        encoding_menu.addAction("Auto", lambda: self._choose_encoding(None))
+        for label, encoding in ENCODINGS:
+            encoding_menu.addAction(label, lambda checked=False, value=encoding: self._choose_encoding(value))
+        self.encoding_label.setMenu(encoding_menu)
         self.statusBar().addPermanentWidget(self.summary_label)
+        self.statusBar().addPermanentWidget(self.encoding_label)
         self.statusBar().addPermanentWidget(self.tab_label)
         self._apply_theme(self.config.settings.get("theme", "gruvbox"))
         self._refresh_titles()
@@ -370,8 +381,10 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.FocusIn:
             if watched is self.left.editor:
                 self._last_active_side = "left"
+                self._refresh_encoding_label()
             elif watched is self.right.editor:
                 self._last_active_side = "right"
+                self._refresh_encoding_label()
         return super().eventFilter(watched, event)
 
     def showEvent(self, event):
@@ -415,21 +428,34 @@ class MainWindow(QMainWindow):
         for editor, label, side in ((self.left, self.left_title, "Left"), (self.right, self.right_title, "Right")):
             name = str(editor.state.path) if editor.state.path else "Untitled"
             label.setText(f"{side}: {name}{' *' if editor.state.dirty else ''}")
-        self.left_info.setText(self._file_info(self.left))
-        self.right_info.setText(self._file_info(self.right))
+        self._refresh_encoding_label()
         if self.left.state.path or self.right.state.path:
             left = self.left.state.path.name if self.left.state.path else "Untitled"
             right = self.right.state.path.name if self.right.state.path else "Untitled"
             self.setWindowTitle(f"{left} ↔ {right} — Diffly")
 
-    def _file_info(self, editor: EditorWidget) -> str:
-        state = editor.state
-        encoding = "UTF-8 BOM" if state.bom else "UTF-8"
-        newline = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}.get(state.newline, "LF")
-        if state.stamp is None:
-            return f"New file  ·  {encoding}  ·  {newline}"
-        modified = datetime.fromtimestamp(state.stamp.modified_ns / 1_000_000_000).strftime("%d/%m/%Y, %H:%M:%S")
-        return f"{modified}  ·  {state.stamp.size:,} bytes  ·  {encoding}  ·  {newline}"
+    def _active_pane(self) -> EditorWidget:
+        return self.left if self._last_active_side == "left" else self.right
+
+    def _refresh_encoding_label(self):
+        state = self._active_pane().state
+        label = next((name for name, value in ENCODINGS if value == state.encoding), state.encoding.upper())
+        if state.bom:
+            label += " BOM"
+        self.encoding_label.setText(f"Encoding: {label}")
+
+    def _choose_encoding(self, encoding: str | None):
+        editor = self._active_pane()
+        if id(editor) in self._busy_files:
+            return
+        if editor.state.path is None:
+            editor.state.encoding = encoding or "utf-8"
+            editor.state.bom = False
+            self._refresh_encoding_label()
+            return
+        if not self._confirm_discard(editor):
+            return
+        self.open_path(editor, editor.state.path, encoding)
 
     def _refresh_stats(self):
         if self._diff is None:
@@ -592,7 +618,7 @@ class MainWindow(QMainWindow):
             return
         self.open_path(editor, Path(filename))
 
-    def open_path(self, editor: EditorWidget, path: Path):
+    def open_path(self, editor: EditorWidget, path: Path, encoding: str | None = None):
         if id(editor) in self._busy_files:
             return
         revision = editor.state.revision
@@ -610,6 +636,7 @@ class MainWindow(QMainWindow):
             editor.state.path = path
             editor.state.stamp = loaded.stamp
             editor.state.newline = loaded.newline
+            editor.state.encoding = loaded.encoding
             editor.state.bom = loaded.bom
             editor.set_syntax_language(language_for(path, loaded.text[:512]))
             self._syntax_timers[editor].start()
@@ -620,7 +647,7 @@ class MainWindow(QMainWindow):
             self._busy_files.discard(id(editor))
             QMessageBox.critical(self, "Open failed", message)
 
-        self.scheduler.submit_file(key, read_file, (path,), done, failed)
+        self.scheduler.submit_file(key, read_file, (path, encoding), done, failed)
 
     def _save(self, editor: EditorWidget, save_as: bool = False):
         if id(editor) in self._busy_files:
@@ -644,6 +671,7 @@ class MainWindow(QMainWindow):
         revision = editor.state.revision
         newline = editor.state.newline
         bom = editor.state.bom
+        encoding = editor.state.encoding
         self._busy_files.add(id(editor))
         self.statusBar().showMessage(f"Saving {path.name}…")
         self._serial += 1
@@ -663,7 +691,7 @@ class MainWindow(QMainWindow):
             self._busy_files.discard(id(editor))
             QMessageBox.critical(self, "Save failed", message)
 
-        self.scheduler.submit_file(key, write_file, (path, text, newline, bom, expected), done, failed)
+        self.scheduler.submit_file(key, write_file, (path, text, newline, bom, expected, encoding), done, failed)
 
     def closeEvent(self, event: QCloseEvent):
         if self._busy_files:

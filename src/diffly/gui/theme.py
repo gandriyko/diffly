@@ -137,10 +137,10 @@ def apply_theme(app: QApplication, theme: dict):
         QMainWindow, QWidget#DifflyRoot {{ background: {c['surface']}; color: {c['text']}; }}
         QLabel, QMenuBar, QMenu, QStatusBar {{ color: {c['text']}; background: {c['surface']}; }}
         QLabel#PaneTitle {{ color: {c['text']}; padding: 5px 8px; }}
-        QLabel#FileInfo {{ color: {c['muted']}; font-size: 11px; padding: 2px 8px; }}
-        QToolButton#IndentWidthButton {{ color: {c['muted']}; background: transparent;
+        QToolButton#IndentWidthButton, QToolButton#EncodingButton {{ color: {c['muted']}; background: transparent;
             border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }}
-        QToolButton#IndentWidthButton:hover {{ border-color: {c['border']}; }}
+        QToolButton#IndentWidthButton:hover, QToolButton#EncodingButton:hover {{ border-color: {c['border']}; }}
+        QToolButton#EncodingButton::menu-indicator {{ image: none; width: 0px; }}
         QStatusBar {{ border: none; padding: 2px 6px; }}
         QStatusBar::item {{ border: none; }}
         QMenuBar::item:selected, QMenu::item:selected {{ background: {c['selection']}; }}

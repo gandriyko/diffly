@@ -16,6 +16,7 @@ class DocumentState:
     path: Path | None = None
     stamp: FileStamp | None = None
     newline: str = "\n"
+    encoding: str = "utf-8"
     bom: bool = False
     revision: int = 0
     saved_revision: int = 0
