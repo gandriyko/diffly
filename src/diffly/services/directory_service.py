@@ -1,6 +1,7 @@
 """Safe byte-for-byte file copying for directory comparison."""
 
 import os
+import shutil
 import stat
 import tempfile
 from pathlib import Path
@@ -83,3 +84,112 @@ def copy_file_checked(
     finally:
         if temp_name is not None:
             os.unlink(temp_name)
+
+
+def path_stamp(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    return stat.S_IFMT(info.st_mode), info.st_size, info.st_mtime_ns, info.st_ino
+
+
+def directory_stamp(path: Path) -> tuple[int, int, int, int] | None:
+    """Return a root stamp for checking that a selected folder has not changed type."""
+    stamp = path_stamp(path)
+    if stamp is not None and stamp[0] != stat.S_IFDIR:
+        raise RuntimeError(f"Not a directory: {path}")
+    return stamp
+
+
+def _tree_snapshot(root: Path) -> tuple:
+    """Capture metadata for every entry without following symbolic links."""
+    result = []
+
+    def visit(path: Path, relative: str):
+        stamp = path_stamp(path)
+        if stamp is None:
+            raise RuntimeError(f"Path changed during folder copy: {path}")
+        link = os.readlink(path) if stamp[0] == stat.S_IFLNK else None
+        result.append((relative, stamp, link))
+        if stamp[0] == stat.S_IFDIR:
+            with os.scandir(path) as scan:
+                children = sorted(scan, key=lambda item: item.name)
+            for child in children:
+                name = f"{relative}/{child.name}" if relative else child.name
+                visit(Path(child.path), name)
+
+    visit(root, "")
+    return tuple(result)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def copy_directory_checked(
+    source: Path, target_root: Path, relative_path: str,
+    expected_source: tuple[int, int, int, int],
+    expected_target: tuple[int, int, int, int] | None,
+) -> tuple[Path, Path | None]:
+    """Replace a whole folder from a staged copy, restoring the old tree on failure."""
+    relative = Path(relative_path)
+    if not relative.parts or relative.is_absolute() or any(part in (".", "..") for part in relative.parts):
+        raise RuntimeError("Invalid relative folder path")
+    target_root = target_root.resolve()
+    target = target_root / relative
+    source = source.absolute()
+    source_resolved = source.resolve()
+    target_resolved = target.resolve()
+    if (source_resolved == target_resolved or source_resolved.is_relative_to(target_resolved)
+            or target_resolved.is_relative_to(source_resolved)):
+        raise RuntimeError("Source and destination folders overlap")
+    if directory_stamp(source) != expected_source:
+        raise RuntimeError("Source folder changed. Compare the directories again.")
+    _check_parent(target_root, target)
+    if path_stamp(target) != expected_target:
+        raise RuntimeError("Destination changed. Compare the directories again.")
+    source_snapshot = _tree_snapshot(source)
+    target_snapshot = _tree_snapshot(target) if expected_target is not None else None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _check_parent(target_root, target)
+    stage = Path(tempfile.mkdtemp(dir=target.parent, prefix=f".{target.name}.stage-"))
+    backup = None
+    try:
+        shutil.copytree(source, stage, symlinks=True, dirs_exist_ok=True)
+        if _tree_snapshot(source) != source_snapshot:
+            raise RuntimeError("Source folder changed during copy.")
+        if path_stamp(target) != expected_target or (
+            target_snapshot is not None and _tree_snapshot(target) != target_snapshot
+        ):
+            raise RuntimeError("Destination changed during copy.")
+        _check_parent(target_root, target)
+        if target_snapshot is not None:
+            backup = Path(tempfile.mkdtemp(dir=target.parent, prefix=f".{target.name}.backup-"))
+            backup.rmdir()
+            os.replace(target, backup)
+        try:
+            os.replace(stage, target)
+            stage = None
+        except OSError as exc:
+            if backup is not None:
+                try:
+                    os.replace(backup, target)
+                except OSError as rollback_error:
+                    raise RuntimeError(
+                        f"Copy failed; original folder remains at {backup}: {rollback_error}"
+                    ) from exc
+                backup = None
+            raise
+        if backup is not None:
+            try:
+                _remove_path(backup)
+            except OSError:
+                return target, backup
+        return target, None
+    finally:
+        if stage is not None and stage.exists():
+            shutil.rmtree(stage)

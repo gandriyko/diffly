@@ -5,6 +5,13 @@ from difflib import SequenceMatcher
 
 
 @dataclass(frozen=True, slots=True)
+class CompareOptions:
+    ignore_whitespace: bool = False
+    ignore_trailing_whitespace: bool = False
+    ignore_case: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Hunk:
     tag: str
     left_start: int
@@ -36,19 +43,37 @@ class DiffResult:
     left_spans: tuple[TextSpan, ...]
     right_spans: tuple[TextSpan, ...]
     stats: DiffStats
+    options: CompareOptions = CompareOptions()
 
 
-def compare(left: str, right: str, left_revision: int, right_revision: int) -> DiffResult:
+def compare(left: str, right: str, left_revision: int, right_revision: int,
+            options: CompareOptions = CompareOptions()) -> DiffResult:
     left_lines = left.splitlines(keepends=True)
     right_lines = right.splitlines(keepends=True)
+    def normalized(line: str) -> str:
+        content = line.rstrip("\r\n")
+        ending = line[len(content):]
+        if options.ignore_whitespace:
+            content = content.replace(" ", "").replace("\t", "")
+        elif options.ignore_trailing_whitespace:
+            content = content.rstrip(" \t")
+        if options.ignore_case:
+            content = content.casefold()
+        return content + ending
+
+    if options == CompareOptions():
+        left_keys, right_keys = left_lines, right_lines
+    else:
+        left_keys = [normalized(line) for line in left_lines]
+        right_keys = [normalized(line) for line in right_lines]
     # Anchor the shared beginning before matching the rest. With repeated
     # blocks, SequenceMatcher can otherwise pair the right-hand block with a
     # later, longer match and report identical leading lines as deleted.
     prefix = 0
     while (prefix < len(left_lines) and prefix < len(right_lines)
-           and left_lines[prefix] == right_lines[prefix]):
+           and left_keys[prefix] == right_keys[prefix]):
         prefix += 1
-    matcher = SequenceMatcher(None, left_lines[prefix:], right_lines[prefix:], autojunk=False)
+    matcher = SequenceMatcher(None, left_keys[prefix:], right_keys[prefix:], autojunk=False)
     hunks = []
     left_spans = []
     right_spans = []
@@ -99,7 +124,7 @@ def compare(left: str, right: str, left_revision: int, right_revision: int) -> D
                     right_spans.append(TextSpan(right_line, b1, b2))
     return DiffResult(
         left_revision, right_revision, tuple(hunks), tuple(left_spans), tuple(right_spans),
-        DiffStats(deleted, added, changed, identical),
+        DiffStats(deleted, added, changed, identical), options,
     )
 
 

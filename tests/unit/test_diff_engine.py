@@ -1,4 +1,4 @@
-from diffly.core.diff.engine import Hunk, compare, transfer_text
+from diffly.core.diff.engine import CompareOptions, Hunk, compare, transfer_text
 
 
 def test_bidirectional_block_transfer():
@@ -61,3 +61,18 @@ def test_diff_statistics_count_equal_inserted_deleted_and_changed_lines():
     assert result.stats.changed == 1
     assert result.stats.deleted == 1
     assert result.stats.added == 0
+
+
+def test_ignore_options_change_matching_without_changing_transfer_text():
+    left = "Name = Value  \nkeep\n"
+    right = "name=value\nkeep\n"
+    assert len(compare(left, right, 0, 0).hunks) == 1
+    assert len(compare(left, right, 0, 0, CompareOptions(ignore_case=True)).hunks) == 1
+    result = compare(left, right, 0, 0, CompareOptions(ignore_whitespace=True, ignore_case=True))
+    assert result.hunks == ()
+    assert result.stats.identical == 2
+    assert compare("a  \n", "a\n", 0, 0, CompareOptions(ignore_trailing_whitespace=True)).hunks == ()
+    assert compare("a b\n", "ab\n", 0, 0, CompareOptions(ignore_trailing_whitespace=True)).hunks
+    changed = compare("a b\n", "a c\n", 0, 0, CompareOptions(ignore_whitespace=True))
+    assert transfer_text(left, right, compare(left, right, 0, 0).hunks[0], True).startswith("Name = Value")
+    assert changed.hunks

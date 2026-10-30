@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from diffly.core.directories.compare import DirectoryEntry, compare_directories
+from diffly.core.directories.filters import DEFAULT_PRESETS
 
 
 STATUS_LABELS = {
@@ -20,13 +21,19 @@ STATUS_LABELS = {
 
 
 class DirectoryComparisonView(QWidget):
+    comparison_ready = Signal(str, str)
+    stats_changed = Signal(object)
+    message_changed = Signal(str)
     open_files = Signal(object, object)
     selection_changed = Signal()
 
-    def __init__(self, scheduler, patterns: list[str], parent=None):
+    def __init__(self, scheduler, patterns: list[str], parent=None, use_gitignore: bool = True,
+                 enabled_presets: tuple[str, ...] = DEFAULT_PRESETS):
         super().__init__(parent)
         self.scheduler = scheduler
         self.patterns = list(patterns)
+        self.use_gitignore = use_gitignore
+        self.enabled_presets = enabled_presets
         self._generation = 0
         self._cancel: Event | None = None
         self._entries: dict[str, DirectoryEntry] = {}
@@ -41,8 +48,7 @@ class DirectoryComparisonView(QWidget):
         layout.setSpacing(7)
         self.left_path = QLineEdit(self)
         self.right_path = QLineEdit(self)
-        self.summary = QLabel("Choose two directories to compare", self)
-        layout.addWidget(self.summary)
+        self.message = "Choose two directories to compare"
 
         self.left_tree = self._make_tree("Left")
         self.right_tree = self._make_tree("Right")
@@ -114,10 +120,27 @@ class DirectoryComparisonView(QWidget):
         self._navigable_paths.clear()
         self._selected_path = None
         self.selection_changed.emit()
-        self.summary.setText("Press Enter in a directory path or use Refresh to compare")
+        self.stats_changed.emit(None)
+        self._set_message("Press Enter in a directory path or use Refresh to compare")
+
+    def _set_message(self, message: str):
+        self.message = message
+        self.message_changed.emit(message)
 
     def set_patterns(self, patterns: list[str]):
+        self.set_filters(patterns, self.use_gitignore, self.enabled_presets)
+
+    def set_gitignore_enabled(self, enabled: bool):
+        self.set_filters(self.patterns, enabled, self.enabled_presets)
+
+    def set_filters(self, patterns: list[str], use_gitignore: bool,
+                    enabled_presets: tuple[str, ...] = DEFAULT_PRESETS):
+        if (self.patterns == list(patterns) and self.use_gitignore == use_gitignore
+                and self.enabled_presets == enabled_presets):
+            return
         self.patterns = list(patterns)
+        self.use_gitignore = use_gitignore
+        self.enabled_presets = enabled_presets
         if self.left_path.text().strip() and self.right_path.text().strip():
             self.compare()
 
@@ -136,7 +159,7 @@ class DirectoryComparisonView(QWidget):
         left_text = self.left_path.text().strip()
         right_text = self.right_path.text().strip()
         if not left_text or not right_text:
-            self.summary.setText("Choose both directories first")
+            self._set_message("Choose both directories first")
             return
         previous_selection = self._selected_path
         self.cancel()
@@ -150,23 +173,26 @@ class DirectoryComparisonView(QWidget):
         self._navigable_paths.clear()
         self._selected_path = None
         self.selection_changed.emit()
-        self.summary.setText("Comparing directories…")
+        self.stats_changed.emit(None)
+        self._set_message("Comparing directories…")
 
         def done(entries):
             if generation != self._generation:
                 return
             self._cancel = None
             self._populate(entries, previous_selection)
+            self.comparison_ready.emit(left_text, right_text)
 
         def failed(message):
             if generation != self._generation:
                 return
             self._cancel = None
-            self.summary.setText(f"Comparison failed: {message}")
+            self._set_message(f"Comparison failed: {message}")
 
         self.scheduler.submit_file(
             ("directory", generation), compare_directories,
-            (Path(left_text), Path(right_text), tuple(self.patterns), cancel), done, failed,
+            (Path(left_text), Path(right_text), tuple(self.patterns), cancel,
+             self.use_gitignore, self.enabled_presets), done, failed,
         )
 
     def _populate(self, entries: tuple[DirectoryEntry, ...], previous_selection: str | None = None):
@@ -211,11 +237,12 @@ class DirectoryComparisonView(QWidget):
                     changed_folders += 1
             else:
                 counts[entry.status] += 1
-        self.summary.setText(
-            f"Files: {counts['different'] + counts['type_changed']} different · "
-            f"{counts['left_only']} left only · {counts['right_only']} right only · "
-            f"{counts['same']} same · Folders: {changed_folders} changed"
-        )
+        self.stats_changed.emit({"different": counts["different"] + counts["type_changed"],
+                                 "left_only": counts["left_only"],
+                                 "right_only": counts["right_only"],
+                                 "same": counts["same"],
+                                 "changed_folders": changed_folders})
+        self._set_message("Double-click a file present on both sides to compare it")
         chosen = previous_selection if previous_selection in self._items else (
             self._navigable_paths[0] if self._navigable_paths else None
         )
@@ -261,7 +288,8 @@ class DirectoryComparisonView(QWidget):
             return False
         source_kind = entry.right_kind if to_left else entry.left_kind
         target_kind = entry.left_kind if to_left else entry.right_kind
-        return source_kind == "file" and target_kind in (None, "file")
+        return ((source_kind == "file" and target_kind in (None, "file"))
+                or (source_kind == "directory" and target_kind in (None, "directory", "file")))
 
     def has_navigable_files(self) -> bool:
         return bool(self._navigable_paths)

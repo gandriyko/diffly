@@ -4,7 +4,12 @@ font_family = "" # Empty selects the system monospace font.
 font_size = 14
 tab_width = 4
 indent_guide_width = 4
+ignore_trailing_whitespace = false
+ignore_whitespace = false
+ignore_case = false
 ignore_patterns = []
+use_gitignore = true
+ignore_presets = ["python", "temporary", "build"]
 
 [themes.gruvbox]
 name = "Gruvbox Dark"

@@ -3,7 +3,7 @@
 from concurrent.futures import ProcessPoolExecutor
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
-from diffly.core.diff.engine import compare
+from diffly.core.diff.engine import CompareOptions, compare
 from diffly.core.documents.syntax import tokenize_document
 
 
@@ -60,10 +60,11 @@ class TaskScheduler(QObject):
         signals.failed.connect(failed)
         self.io_pool.start(_FileTask(key, operation, args, signals))
 
-    def submit_diff(self, left: str, right: str, left_revision: int, right_revision: int):
+    def submit_diff(self, left: str, right: str, left_revision: int, right_revision: int,
+                    options: CompareOptions = CompareOptions()):
         if self._diff_future is not None:
             self._diff_future.cancel()
-        future = self.process_pool.submit(compare, left, right, left_revision, right_revision)
+        future = self.process_pool.submit(compare, left, right, left_revision, right_revision, options)
         self._diff_future = future
 
         def finished(done):

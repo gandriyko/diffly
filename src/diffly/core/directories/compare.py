@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 
+from diffly.core.directories.gitignore import ancestor_rules, is_ignored, read_rules
+from diffly.core.directories.filters import DEFAULT_PRESETS, effective_patterns
+
 
 @dataclass(frozen=True, slots=True)
 class DirectoryEntry:
@@ -43,28 +46,35 @@ def _ignored(name: str, relative_path: str, patterns: tuple[str, ...]) -> bool:
     return False
 
 
-def _scan(root: Path, patterns: tuple[str, ...], cancel: Event | None) -> dict[str, _ScannedEntry]:
+def _scan(root: Path, patterns: tuple[str, ...], cancel: Event | None,
+          use_gitignore: bool) -> dict[str, _ScannedEntry]:
     result: dict[str, _ScannedEntry] = {}
+    inherited_rules = ancestor_rules(root) if use_gitignore else ()
 
-    def visit(folder: Path, parent: str) -> None:
+    def visit(folder: Path, parent: str, rules: tuple) -> None:
         _check_cancelled(cancel)
+        if use_gitignore and folder != root:
+            rules += read_rules(folder)
         with os.scandir(folder) as scan:
             children = sorted(scan, key=lambda entry: (entry.name.casefold(), entry.name))
         for child in children:
             _check_cancelled(cancel)
             relative = f"{parent}/{child.name}" if parent else child.name
-            if _ignored(child.name, relative, patterns):
-                continue
             path = Path(child.path)
+            is_dir = child.is_dir(follow_symlinks=False) if not child.is_symlink() else False
+            if _ignored(child.name, relative, patterns) or (
+                use_gitignore and is_ignored(path, is_dir, rules)
+            ):
+                continue
             if child.is_symlink():
                 result[relative] = _ScannedEntry(path, "symlink")
-            elif child.is_dir(follow_symlinks=False):
+            elif is_dir:
                 result[relative] = _ScannedEntry(path, "directory")
-                visit(path, relative)
+                visit(path, relative, rules)
             elif child.is_file(follow_symlinks=False):
                 result[relative] = _ScannedEntry(path, "file", child.stat(follow_symlinks=False).st_size)
 
-    visit(root, "")
+    visit(root, "", inherited_rules)
     return result
 
 
@@ -82,6 +92,7 @@ def _same_file(left: Path, right: Path, cancel: Event | None) -> bool:
 
 def compare_directories(
     left_root: Path, right_root: Path, patterns: tuple[str, ...] = (), cancel: Event | None = None,
+    use_gitignore: bool = True, presets: tuple[str, ...] = DEFAULT_PRESETS,
 ) -> tuple[DirectoryEntry, ...]:
     """Compare names, types and file bytes; never follow symbolic links."""
     left_root = Path(left_root).expanduser().resolve()
@@ -89,9 +100,9 @@ def compare_directories(
     for root in (left_root, right_root):
         if not root.is_dir():
             raise ValueError(f"Not a directory: {root}")
-    patterns = tuple(pattern.strip() for pattern in patterns if pattern.strip())
-    left = _scan(left_root, patterns, cancel)
-    right = _scan(right_root, patterns, cancel)
+    patterns = effective_patterns(tuple(pattern.strip() for pattern in patterns if pattern.strip()), presets)
+    left = _scan(left_root, patterns, cancel, use_gitignore)
+    right = _scan(right_root, patterns, cancel, use_gitignore)
     union = set(left) | set(right)
     entries: dict[str, DirectoryEntry] = {}
     changed_children: set[str] = set()

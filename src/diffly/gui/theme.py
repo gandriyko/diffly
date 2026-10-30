@@ -52,6 +52,15 @@ def save_selected_theme(name: str) -> None:
     _save_settings({"theme": f'"{name}"'})
 
 
+def save_font_size(size: int) -> None:
+    _save_settings({"font_size": str(size)})
+
+
+def save_comparison_options(options) -> None:
+    _save_settings({key: "true" if getattr(options, key) else "false" for key in
+                    ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")})
+
+
 def save_indent_width(width: int) -> None:
     """Keep tab stops and indent guides on the same two/four-space grid."""
     if width not in (2, 4):
@@ -63,6 +72,14 @@ def save_ignore_patterns(patterns: list[str]) -> None:
     """Persist directory ignore masks without replacing other settings."""
     unique = list(dict.fromkeys(pattern.strip() for pattern in patterns if pattern.strip()))
     _save_settings({"ignore_patterns": json.dumps(unique, ensure_ascii=False)})
+
+
+def save_directory_filters(patterns: list[str], use_gitignore: bool,
+                           enabled_presets: tuple[str, ...]) -> None:
+    unique = list(dict.fromkeys(pattern.strip() for pattern in patterns if pattern.strip()))
+    _save_settings({"ignore_patterns": json.dumps(unique, ensure_ascii=False),
+                    "use_gitignore": "true" if use_gitignore else "false",
+                    "ignore_presets": json.dumps(enabled_presets)})
 
 
 def _save_settings(values: dict[str, str]) -> None:
@@ -142,6 +159,12 @@ def apply_theme(app: QApplication, theme: dict):
     """
     app.setStyleSheet(f"""
         QMainWindow, QWidget#DifflyRoot {{ background: {c['surface']}; color: {c['text']}; }}
+        QWidget#FindPanel {{ background: {c['surface']}; border-top: 1px solid {c['border']}; }}
+        QLabel#FindTarget {{ color: {c['accent']}; font-weight: bold; }}
+        QLabel#FindMessage {{ color: {c['muted']}; }}
+        QToolButton#FindPanelButton {{ color: {c['text']}; background: {c['button']};
+            border: 1px solid {c['border']}; border-radius: 4px; min-width: 26px; padding: 4px; }}
+        QToolButton#FindPanelButton:hover {{ background: {c['button_hover']}; }}
         QLabel, QMenuBar, QMenu, QStatusBar {{ color: {c['text']}; background: {c['surface']}; }}
         QLabel#PaneTitle {{ color: {c['text']}; padding: 5px 8px; }}
         QWidget#LinuxTitleBar {{ background: {c['surface']}; border-bottom: 1px solid {c['border']}; }}
@@ -149,9 +172,20 @@ def apply_theme(app: QApplication, theme: dict):
         QToolButton#LinuxWindowButton {{ color: {c['text']}; background: transparent;
             border: 1px solid transparent; border-radius: 5px; }}
         QToolButton#LinuxWindowButton:hover {{ border-color: {c['border']}; }}
-        QToolButton#IndentWidthButton, QToolButton#EncodingButton {{ color: {c['muted']}; background: transparent;
+        QToolButton#EncodingButton {{ color: {c['muted']}; background: transparent;
             border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }}
-        QToolButton#IndentWidthButton:hover, QToolButton#EncodingButton:hover {{ border-color: {c['border']}; }}
+        QToolButton#EncodingButton:hover {{ border-color: {c['border']}; }}
+        QWidget#SettingsPage, QWidget#SettingsContent {{ background: {c['surface']}; color: {c['text']}; }}
+        QWidget#SettingsPage QLabel {{ background: transparent; }}
+        QLabel#SettingsTitle {{ color: {c['text']}; font-size: 20px; font-weight: bold; }}
+        QLabel#SettingsSectionTitle {{ color: {c['text']}; font-size: 14px; font-weight: bold; }}
+        QLabel#SettingsSubheading {{ color: {c['muted']}; font-size: 12px; font-weight: bold; padding-top: 8px; }}
+        QLabel#SettingsHint {{ color: {c['muted']}; }}
+        QWidget#SettingsCard {{ color: {c['text']}; background: {c['background']};
+            border: 1px solid {c['border']}; border-radius: 8px; }}
+        QFrame#SettingsDivider {{ color: {c['border']}; background: {c['border']};
+            border: none; max-height: 1px; }}
+        QWidget#SettingsPage QCheckBox {{ color: {c['text']}; spacing: 9px; }}
         QToolButton#EncodingButton::menu-indicator {{ image: none; width: 0px; }}
         QToolButton#DirectoryBrowseButton {{ background: {c['button']};
             border: 1px solid {c['border']}; border-radius: 4px; }}

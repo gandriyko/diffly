@@ -1,6 +1,6 @@
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QTextCursor, QWheelEvent
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
 
 from diffly.core.diff.engine import compare
 from diffly.gui.main_window import MainWindow
@@ -227,10 +227,10 @@ def test_linux_toolbar_shares_title_row_with_menu_and_window_controls(qtbot, mon
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert window.menuWidget() is header
     assert window.toolbar.parent() is header
-    assert [action.text() for action in header.menu_bar.actions()] == ["File", "Edit", "Theme", "Settings"]
+    assert [action.text() for action in header.menu_bar.actions()] == ["File", "Edit", "Settings"]
     window.setWindowTitle("Left ↔ Right — Diffly")
     assert header.title.text() == "Left ↔ Right — Diffly"
-    maximize = next(button for button in header.findChildren(type(window.tab_label))
+    maximize = next(button for button in header.findChildren(QToolButton)
                     if button.toolTip() == "Maximize or restore")
     qtbot.mouseClick(maximize, Qt.MouseButton.LeftButton)
     assert window.isMaximized()
@@ -248,15 +248,15 @@ def test_compact_layout_and_status_information(qtbot):
     window.right.load_text("same\nright\n")
     window._accept_diff(compare(window.left.text(), window.right.text(), window.left.state.revision, window.right.state.revision))
     window.show()
-    assert window.tabs.count() == 2
+    assert window.tabs.count() == 3
     assert window.file_comparison.layout().contentsMargins().left() == 0
     assert window.file_comparison.layout().horizontalSpacing() == 1
     assert "1 changed" in window.summary_label.text()
     assert "1 identical" in window.summary_label.text()
-    width = max(1, int(window.config.settings.get("tab_width", 4)))
-    assert window.tab_label.text() == f"Tab: {width} spaces"
+    assert not window.findChildren(QToolButton, "IndentWidthButton")
     assert "UTF-8" in window.encoding_label.text()
-    assert window.file_comparison.layout().rowCount() == 3
+    assert window.file_comparison.layout().rowCount() == 4
+    assert not window.find_panel.isVisible()
     window.close()
 
 

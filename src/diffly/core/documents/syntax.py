@@ -11,18 +11,32 @@ TokenSpan = tuple[int, int, int, str]
 _LANGUAGES = {
     ".json": "json", ".jsonc": "json", ".py": "python", ".pyw": "python",
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "tsx",
+    ".jsx": "jsx", ".html": "html", ".htm": "html", ".xhtml": "html",
+    ".css": "css", ".scss": "scss",
+    ".xml": "xml", ".svg": "xml", ".sql": "sql",
+    ".ini": "ini", ".cfg": "ini", ".dockerfile": "docker", ".mk": "make",
     ".php": "php", ".go": "go", ".rs": "rust",
     ".sh": "bash", ".bash": "bash", ".zsh": "bash",
     ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
     ".md": "markdown", ".markdown": "markdown",
 }
-_SHELL_FILES = {".bashrc", ".bash_profile", ".bash_login", ".zshrc", ".zprofile"}
+_NAMED_FILES = {
+    ".bashrc": "bash", ".bash_profile": "bash", ".bash_login": "bash",
+    ".zshrc": "bash", ".zprofile": "bash", ".editorconfig": "ini",
+    "makefile": "make", "gnumakefile": "make",
+}
 
 
 def language_for(path: Path | None, sample: str) -> str | None:
     if path is not None:
-        if path.name.lower() in _SHELL_FILES:
-            return "bash"
+        name = path.name.lower()
+        if name in _NAMED_FILES:
+            return _NAMED_FILES[name]
+        if name == "dockerfile" or name.startswith("dockerfile."):
+            return "docker"
+        if name.startswith("makefile."):
+            return "make"
         language = _LANGUAGES.get(path.suffix.lower())
         if language or path.suffix:
             return language

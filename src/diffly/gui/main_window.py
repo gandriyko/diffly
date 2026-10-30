@@ -1,9 +1,10 @@
 import os
+import stat
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
+    QInputDialog,
     QScrollBar,
     QTabWidget,
     QToolBar,
@@ -20,22 +22,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diffly.core.diff.engine import DiffResult, compare, delete_hunk_text, transfer_text
+from diffly.core.diff.engine import CompareOptions, DiffResult, compare, delete_hunk_text, transfer_text
+from diffly.core.directories.filters import DEFAULT_PRESETS, PRESETS
 from diffly.core.documents.syntax import language_for
 from diffly.gui.diff_gutter import DiffGutter
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.directory_comparison import DirectoryComparisonView
 from diffly.gui.editor_widget import EditorWidget
+from diffly.gui.find_panel import FindPanel
 from diffly.gui.icons import toolbar_icon
-from diffly.gui.ignore_patterns_dialog import IgnorePatternsDialog
+from diffly.gui.settings_page import SettingsPage
 from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.theme import (
-    apply_theme, editor_font, load_config, save_ignore_patterns, save_indent_width, save_selected_theme,
+    apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
+    save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
 from diffly.services.file_service import file_stamp, read_file, write_file
-from diffly.services.directory_service import copy_file_checked, regular_file_stamp
+from diffly.services.directory_service import (
+    copy_directory_checked, copy_file_checked, directory_stamp, path_stamp, regular_file_stamp,
+)
 from diffly.services.task_scheduler import TaskScheduler
+from diffly.services.session_store import load_sessions, remember, save_sessions
 
 
 ENCODINGS = (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
@@ -105,6 +113,17 @@ class MainWindow(QMainWindow):
         self.scheduler.diff_failed.connect(self._diff_error)
         self.scheduler.syntax_ready.connect(self._accept_syntax)
         self.config = load_config()
+        try:
+            self.sessions = load_sessions()
+        except (OSError, ValueError) as exc:
+            self.sessions = {"saved": [], "recent": []}
+            self._sessions_error = str(exc)
+        else:
+            self._sessions_error = None
+        self.compare_options = CompareOptions(**{
+            key: bool(self.config.settings.get(key, False)) for key in
+            ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")
+        })
         self.toolbar = None
         self.left = EditorWidget()
         self.right = EditorWidget()
@@ -154,19 +173,34 @@ class MainWindow(QMainWindow):
         self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
         self.shared_horizontal_scrollbar.installEventFilter(self)
         layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 3)
+        self.find_panel = FindPanel(self, root)
+        layout.addWidget(self.find_panel, 3, 0, 1, 4)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(2, 1)
         layout.setRowStretch(1, 1)
         self.file_comparison = root
         self.directory_comparison = DirectoryComparisonView(
-            self.scheduler, list(self.config.settings.get("ignore_patterns", [])), self
+            self.scheduler, list(self.config.settings.get("ignore_patterns", [])), self,
+            bool(self.config.settings.get("use_gitignore", True)),
+            tuple(key for key in self.config.settings.get("ignore_presets", DEFAULT_PRESETS) if key in PRESETS),
         )
+        self._directory_stats = None
         self.directory_comparison.open_files.connect(self._open_directory_files)
+        self.directory_comparison.comparison_ready.connect(self._remember_directory)
+        self.directory_comparison.stats_changed.connect(self._set_directory_stats)
+        self.directory_comparison.message_changed.connect(self._directory_message_changed)
         self.directory_comparison.selection_changed.connect(self._refresh_toolbar)
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("ComparisonTabs")
         self.tabs.addTab(self.directory_comparison, "Directories")
         self.tabs.addTab(root, "Files")
+        self.settings_page = SettingsPage(self.config.settings, self.config.themes, self)
+        self.tabs.addTab(self.settings_page, "Settings")
+        self.settings_page.theme_changed.connect(self._choose_theme)
+        self.settings_page.font_size_changed.connect(self._set_font_size)
+        self.settings_page.indent_width_changed.connect(self._set_indent_width)
+        self.settings_page.comparison_changed.connect(self._set_comparison_options)
+        self.settings_page.filters_changed.connect(self._set_directory_filters)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
 
@@ -186,6 +220,10 @@ class MainWindow(QMainWindow):
         self._update_horizontal_scroll_range()
         self._make_menu()
         self._make_toolbar()
+        self._recent_timer = QTimer(self)
+        self._recent_timer.setSingleShot(True)
+        self._recent_timer.setInterval(700)
+        self._recent_timer.timeout.connect(self._remember_files)
         self.debounce = QTimer(self)
         self.debounce.setSingleShot(True)
         self.debounce.setInterval(300)
@@ -198,12 +236,7 @@ class MainWindow(QMainWindow):
             timer.timeout.connect(lambda s=side, e=editor: self._request_syntax(s, e))
             self._syntax_timers[editor] = timer
         self.summary_label = QLabel()
-        self.tab_label = QToolButton()
-        self.tab_label.setObjectName("IndentWidthButton")
-        self.tab_label.setAutoRaise(True)
-        self.tab_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tab_label.setToolTip("Switch tab stops and indent guides between 2 and 4 spaces")
-        self.tab_label.clicked.connect(self._toggle_indent_width)
+        self.directory_summary_label = QLabel()
         self.encoding_label = QToolButton()
         self.encoding_label.setObjectName("EncodingButton")
         self.encoding_label.setAutoRaise(True)
@@ -216,8 +249,8 @@ class MainWindow(QMainWindow):
             encoding_menu.addAction(label, lambda checked=False, value=encoding: self._choose_encoding(value))
         self.encoding_label.setMenu(encoding_menu)
         self.statusBar().addPermanentWidget(self.summary_label)
+        self.statusBar().addPermanentWidget(self.directory_summary_label)
         self.statusBar().addPermanentWidget(self.encoding_label)
-        self.statusBar().addPermanentWidget(self.tab_label)
         self._apply_theme(self.config.settings.get("theme", "gruvbox"))
         self._refresh_titles()
         self._refresh_toolbar()
@@ -240,6 +273,11 @@ class MainWindow(QMainWindow):
                 action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             file_menu.addAction(action)
+        file_menu.addSeparator()
+        file_menu.addAction("Save Comparison…", self._save_comparison)
+        self.saved_menu = file_menu.addMenu("Saved Comparisons")
+        self.recent_menu = file_menu.addMenu("Recent Comparisons")
+        self._refresh_session_menus()
         edit_menu = menu_bar.addMenu("Edit")
         for label, shortcut, operation in (
             ("Undo", "Ctrl+Z", "undo"),
@@ -249,6 +287,19 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, op=operation: getattr(self.focused_editor(), op)())
             edit_menu.addAction(action)
+        edit_menu.addSeparator()
+        self.find_actions = []
+        for label, shortcut, callback in (
+            ("Find…", "Ctrl+F", lambda: self._show_find(False)),
+            ("Replace…", "Ctrl+H", lambda: self._show_find(True)),
+            ("Find Next", "F3", lambda: self._repeat_find(False)),
+            ("Find Previous", "Shift+F3", lambda: self._repeat_find(True)),
+        ):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(callback)
+            edit_menu.addAction(action)
+            self.find_actions.append(action)
         edit_menu.addSeparator()
         for label, shortcut, callback in (
             ("Next Difference", "Ctrl+Alt+Down", lambda: self._navigate(1)),
@@ -264,19 +315,151 @@ class MainWindow(QMainWindow):
             action.triggered.connect(callback)
             edit_menu.addAction(action)
 
-        theme_menu = menu_bar.addMenu("Theme")
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        for key, theme in self.config.themes.items():
-            action = QAction(theme.get("name", key), self)
-            action.setCheckable(True)
-            action.setChecked(key == self.config.settings.get("theme"))
-            action.triggered.connect(lambda checked=False, name=key: self._choose_theme(name))
-            group.addAction(action)
-            theme_menu.addAction(action)
-        self._theme_actions = {action.text(): action for action in group.actions()}
         settings_menu = menu_bar.addMenu("Settings")
-        settings_menu.addAction("Directory ignore masks…", self._edit_ignore_patterns)
+        settings_action = settings_menu.addAction("Open Settings")
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        settings_action.triggered.connect(lambda: self.tabs.setCurrentWidget(self.settings_page))
+
+    def _show_find(self, replace: bool):
+        if self.tabs.currentWidget() is not self.file_comparison:
+            return
+        self.find_panel.show_search(replace)
+
+    def _repeat_find(self, backwards: bool):
+        if self.tabs.currentWidget() is not self.file_comparison:
+            return
+        if not self.find_panel.query.text():
+            self._show_find(False)
+            return
+        self.find_panel.set_target(self._active_pane())
+        if backwards:
+            found = self.find_panel.find_previous()
+        else:
+            found = self.find_panel.find_next()
+        if not found:
+            self.statusBar().showMessage("No matches in current editor")
+
+    def _set_comparison_options(self, options: CompareOptions):
+        self.compare_options = options
+        self._documents_changed(self.left)
+        values = {key: getattr(options, key) for key in
+                  ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}
+        self.config.settings.update(values)
+        try:
+            save_comparison_options(options)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Comparison settings applied but not saved: {exc}")
+
+    def _comparison_entry(self):
+        if self.tabs.currentWidget() is self.directory_comparison:
+            left = self.directory_comparison.left_path.text().strip()
+            right = self.directory_comparison.right_path.text().strip()
+            kind = "directories"
+        else:
+            left = str(self.left.state.path or "")
+            right = str(self.right.state.path or "")
+            kind = "files"
+        if not left or not right:
+            return None
+        return {"kind": kind, "left": str(Path(left).expanduser().absolute()),
+                "right": str(Path(right).expanduser().absolute()),
+                "options": {key: getattr(self.compare_options, key) for key in
+                            ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}}
+
+    def _persist_sessions(self):
+        if self._sessions_error is not None:
+            self.statusBar().showMessage(f"Sessions file could not be read: {self._sessions_error}")
+            return
+        try:
+            save_sessions(self.sessions)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Could not save comparisons: {exc}")
+        else:
+            self._refresh_session_menus()
+
+    def _refresh_session_menus(self):
+        for menu, key in ((self.saved_menu, "saved"), (self.recent_menu, "recent")):
+            menu.clear()
+            for entry in self.sessions[key]:
+                label = entry.get("name") or f'{Path(entry["left"]).name} ↔ {Path(entry["right"]).name}'
+                action = menu.addAction(label)
+                action.setToolTip(f'{entry["left"]} ↔ {entry["right"]}')
+                action.triggered.connect(lambda checked=False, item=entry.copy(): self._open_comparison(item))
+            if not self.sessions[key]:
+                empty = menu.addAction("No comparisons")
+                empty.setEnabled(False)
+        if self.sessions["saved"]:
+            self.saved_menu.addSeparator()
+            self.saved_menu.addAction("Remove Saved Comparison…", self._remove_saved_comparison)
+        if self.sessions["recent"]:
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("Clear Recent Comparisons", self._clear_recent)
+
+    def _save_comparison(self):
+        entry = self._comparison_entry()
+        if entry is None:
+            QMessageBox.information(self, "Save Comparison", "Choose two files or directories first.")
+            return
+        name, accepted = QInputDialog.getText(self, "Save Comparison", "Name")
+        name = name.strip()
+        if not accepted or not name:
+            return
+        entry["name"] = name
+        self.sessions["saved"] = [item for item in self.sessions["saved"] if item.get("name") != name]
+        self.sessions["saved"].insert(0, entry)
+        self._persist_sessions()
+
+    def _remove_saved_comparison(self):
+        names = [entry["name"] for entry in self.sessions["saved"]]
+        name, accepted = QInputDialog.getItem(self, "Remove Saved Comparison", "Comparison", names, 0, False)
+        if accepted:
+            self.sessions["saved"] = [entry for entry in self.sessions["saved"] if entry["name"] != name]
+            self._persist_sessions()
+
+    def _clear_recent(self):
+        self.sessions["recent"] = []
+        self._persist_sessions()
+
+    def _remember_files(self):
+        if self._busy_files or self.left.state.path is None or self.right.state.path is None:
+            return
+        entry = {"kind": "files", "left": str(self.left.state.path.absolute()),
+                 "right": str(self.right.state.path.absolute()),
+                 "options": {key: getattr(self.compare_options, key) for key in
+                             ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}}
+        remember(self.sessions, entry)
+        self._persist_sessions()
+
+    def _remember_directory(self, left: str, right: str):
+        entry = {"kind": "directories", "left": str(Path(left).expanduser().absolute()),
+                 "right": str(Path(right).expanduser().absolute())}
+        remember(self.sessions, entry)
+        self._persist_sessions()
+
+    def _open_comparison(self, entry: dict):
+        if self._busy_files or self._directory_copy_busy:
+            return
+        paths = (Path(entry["left"]), Path(entry["right"]))
+        if not all(path.exists() for path in paths):
+            QMessageBox.warning(self, "Open Comparison", "One or both paths no longer exist.")
+            return
+        if entry["kind"] == "files":
+            if not all(self._confirm_discard(editor) for editor in (self.left, self.right)):
+                return
+            self.tabs.setCurrentWidget(self.file_comparison)
+            options = entry.get("options", {})
+            self.compare_options = CompareOptions(**{
+                key: bool(options.get(key, False)) for key in
+                ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")
+            })
+            self.settings_page.set_comparison_options(self.compare_options)
+            self.open_path(self.left, paths[0])
+            self.open_path(self.right, paths[1])
+        else:
+            self.tabs.setCurrentWidget(self.directory_comparison)
+            self.directory_comparison.left_path.setText(str(paths[0]))
+            self.directory_comparison.right_path.setText(str(paths[1]))
+            self.directory_comparison.compare()
 
     def _make_toolbar(self):
         modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
@@ -326,6 +509,14 @@ class MainWindow(QMainWindow):
         toolbar.installEventFilter(self)
 
     def _refresh_toolbar(self):
+        if self.tabs.currentWidget() is self.settings_page:
+            for action in (self.refresh_action, self.previous_action, self.next_action,
+                           self.apply_left_action, self.apply_right_action, self.paste_action,
+                           self.delete_left_action, self.delete_right_action):
+                action.setEnabled(False)
+            if self._native_toolbar_bridge is not None:
+                self._native_toolbar_bridge.sync()
+            return
         files_active = self.tabs.currentWidget() is self.file_comparison
         if not files_active:
             view = self.directory_comparison
@@ -342,8 +533,11 @@ class MainWindow(QMainWindow):
             modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
             self.previous_action.setToolTip(f"Previous different file ({modifier}+Up)")
             self.next_action.setToolTip(f"Next different file ({modifier}+Down)")
-            self.apply_left_action.setToolTip(f"Copy selected file from right to left ({modifier}+Left)")
-            self.apply_right_action.setToolTip(f"Copy selected file from left to right ({modifier}+Right)")
+            entry = view.selected_entry()
+            left_kind = "folder" if entry is not None and entry.right_kind == "directory" else "file"
+            right_kind = "folder" if entry is not None and entry.left_kind == "directory" else "file"
+            self.apply_left_action.setToolTip(f"Copy selected {left_kind} from right to left ({modifier}+Left)")
+            self.apply_right_action.setToolTip(f"Copy selected {right_kind} from left to right ({modifier}+Right)")
             self._set_transfer_icons(False)
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
@@ -395,13 +589,15 @@ class MainWindow(QMainWindow):
         self._active_theme_name = name
         theme = self.config.themes[name]
         apply_theme(QApplication.instance(), theme)
+        self.settings_page.set_choice_theme(theme)
+        self.settings_page.align_control_heights()
         self._refresh_stats()
+        self._refresh_directory_stats()
         for action, kind in self._toolbar_icons.items():
             action.setIcon(toolbar_icon(kind, theme["text"]))
         font = editor_font(self.config.settings)
         tab_width = max(1, int(self.config.settings.get("tab_width", 4)))
         indent_guide_width = max(1, int(self.config.settings.get("indent_guide_width", 4)))
-        self.tab_label.setText(f"Tab: {tab_width} spaces")
         for editor in (self.left, self.right):
             editor.set_font(font, tab_width, indent_guide_width)
             editor.set_theme(theme)
@@ -422,17 +618,24 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self.statusBar().showMessage(f"Theme applied but not saved: {exc}")
 
-    def _edit_ignore_patterns(self):
-        dialog = IgnorePatternsDialog(list(self.config.settings.get("ignore_patterns", [])), self)
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
-        patterns = dialog.patterns()
-        self.config.settings["ignore_patterns"] = patterns
-        self.directory_comparison.set_patterns(patterns)
+    def _set_font_size(self, size: int):
+        self.config.settings["font_size"] = size
+        self._apply_theme(self._active_theme_name)
         try:
-            save_ignore_patterns(patterns)
+            save_font_size(size)
         except OSError as exc:
-            self.statusBar().showMessage(f"Ignore masks applied but not saved: {exc}")
+            self.statusBar().showMessage(f"Font size applied but not saved: {exc}")
+
+    def _set_directory_filters(self, patterns: list[str], use_gitignore: bool,
+                               enabled_presets: tuple[str, ...]):
+        self.config.settings["ignore_patterns"] = patterns
+        self.config.settings["use_gitignore"] = use_gitignore
+        self.config.settings["ignore_presets"] = list(enabled_presets)
+        self.directory_comparison.set_filters(patterns, use_gitignore, enabled_presets)
+        try:
+            save_directory_filters(patterns, use_gitignore, enabled_presets)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Directory filters applied but not saved: {exc}")
 
     def _open_directory_files(self, left: Path, right: Path):
         if any(id(editor) in self._busy_files for editor in (self.left, self.right)):
@@ -462,26 +665,32 @@ class MainWindow(QMainWindow):
 
     def _tab_changed(self, index: int):
         files_active = self.tabs.widget(index) is self.file_comparison
-        for widget in (self.summary_label, self.encoding_label, self.tab_label):
+        directories_active = self.tabs.widget(index) is self.directory_comparison
+        if not files_active:
+            self.find_panel.hide()
+        for action in self.find_actions:
+            action.setEnabled(files_active)
+        for widget in (self.summary_label, self.encoding_label):
             widget.setVisible(files_active)
+        self.directory_summary_label.setVisible(directories_active)
         if self._native_toolbar_bridge is None:
-            self.toolbar.setVisible(True)
+            self.toolbar.setVisible(files_active or directories_active)
         if files_active:
             self._refresh_titles()
-        else:
+        elif directories_active:
             self.setWindowTitle("Directories — Diffly")
+        else:
+            self.setWindowTitle("Settings — Diffly")
         self.statusBar().showMessage(
             "Open a file in each pane to compare" if files_active
-            else "Double-click a file present on both sides to compare it"
+            else self.directory_comparison.message if directories_active else ""
         )
         self._refresh_toolbar()
 
-    def _toggle_indent_width(self):
-        current = max(1, int(self.config.settings.get("tab_width", 4)))
-        width = 4 if current == 2 else 2
+    def _set_indent_width(self, width: int):
         self.config.settings["tab_width"] = width
         self.config.settings["indent_guide_width"] = width
-        self.tab_label.setText(f"Tab: {width} spaces")
+        self.settings_page.set_indent_width(width)
         font = editor_font(self.config.settings)
         for editor in (self.left, self.right):
             editor.set_font(font, width, width)
@@ -583,9 +792,13 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.FocusIn:
             if watched is self.left.editor:
                 self._last_active_side = "left"
+                if self.find_panel.isVisible():
+                    self.find_panel.set_target(self.left)
                 self._refresh_encoding_label()
             elif watched is self.right.editor:
                 self._last_active_side = "right"
+                if self.find_panel.isVisible():
+                    self.find_panel.set_target(self.right)
                 self._refresh_encoding_label()
         return super().eventFilter(watched, event)
 
@@ -675,6 +888,30 @@ class MainWindow(QMainWindow):
             f'<span style="color:{theme["muted"]}">●</span> {stats.identical} identical'
         )
 
+    def _set_directory_stats(self, stats):
+        self._directory_stats = stats
+        self._refresh_directory_stats()
+
+    def _refresh_directory_stats(self):
+        if not hasattr(self, "directory_summary_label"):
+            return
+        stats = self._directory_stats
+        if stats is None:
+            self.directory_summary_label.setText("")
+            return
+        theme = self.config.themes[self._active_theme_name]
+        self.directory_summary_label.setText(
+            f'<span style="color:{theme["overview_replace"]}">●</span> {stats["different"]} different  '
+            f'<span style="color:{theme["overview_removed"]}">●</span> {stats["left_only"]} left only  '
+            f'<span style="color:{theme["overview_added"]}">●</span> {stats["right_only"]} right only  '
+            f'<span style="color:{theme["muted"]}">●</span> {stats["same"]} same  '
+            f'<span style="color:{theme["overview_replace"]}">●</span> {stats["changed_folders"]} folders changed'
+        )
+
+    def _directory_message_changed(self, message: str):
+        if self.tabs.currentWidget() is self.directory_comparison:
+            self.statusBar().showMessage(message)
+
     def _documents_changed(self, editor: EditorWidget):
         self._diff = None
         self._selected_hunk = -1
@@ -713,10 +950,11 @@ class MainWindow(QMainWindow):
         self.scheduler.submit_diff(
             self.left.text(), self.right.text(),
             self.left.state.revision, self.right.state.revision,
+            self.compare_options,
         )
 
     def _accept_diff(self, result: DiffResult):
-        if (result.left_revision, result.right_revision) != (
+        if result.options != self.compare_options or (result.left_revision, result.right_revision) != (
             self.left.state.revision, self.right.state.revision
         ):
             return
@@ -788,7 +1026,7 @@ class MainWindow(QMainWindow):
 
     def _transfer(self, row: int, source_is_left: bool, append: bool = False):
         if self.tabs.currentWidget() is self.directory_comparison:
-            self._copy_selected_file(to_left=not source_is_left)
+            self._copy_selected_entry(to_left=not source_is_left)
             return
         if self.tabs.currentWidget() is not self.file_comparison:
             return
@@ -815,17 +1053,22 @@ class MainWindow(QMainWindow):
         # above 2 MB the async path keeps the UI responsive and the view may shift once.
         if len(left) + len(right) <= 2_000_000:
             self.debounce.stop()
-            self._accept_diff(compare(left, right, self.left.state.revision, self.right.state.revision))
+            self._accept_diff(compare(left, right, self.left.state.revision,
+                                      self.right.state.revision, self.compare_options))
         self.shared_scrollbar.setValue(vertical)
         self._scroll_both(self.shared_scrollbar.value())
         self._scroll_both_horizontal(horizontal)
         target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
 
-    def _copy_selected_file(self, to_left: bool):
+    def _copy_selected_entry(self, to_left: bool):
         view = self.directory_comparison
         if self._directory_copy_busy or not view.can_copy(to_left):
             return
         entry = view.selected_entry()
+        source_kind = entry.right_kind if to_left else entry.left_kind
+        if source_kind == "directory":
+            self._copy_selected_directory(entry, to_left)
+            return
         source = entry.right_path if to_left else entry.left_path
         target_root = Path(view.left_path.text() if to_left else view.right_path.text()).expanduser().resolve()
         target = target_root / entry.relative_path
@@ -872,6 +1115,64 @@ class MainWindow(QMainWindow):
 
         self.scheduler.submit_file(
             ("directory-copy", id(self)), copy_file_checked,
+            (source, target_root, entry.relative_path, source_stamp, target_stamp), done, failed,
+        )
+
+    def _copy_selected_directory(self, entry, to_left: bool):
+        view = self.directory_comparison
+        source = entry.right_path if to_left else entry.left_path
+        target_root = Path(view.left_path.text() if to_left else view.right_path.text()).expanduser().resolve()
+        target = target_root / entry.relative_path
+        for editor in (self.left, self.right):
+            path = editor.state.path
+            if editor.state.dirty and path is not None and (
+                path.is_relative_to(source) or path.is_relative_to(target)
+            ):
+                QMessageBox.warning(self, "Unsaved changes", "Save or discard edits inside this folder before copying it.")
+                return
+        try:
+            source_stamp = directory_stamp(source)
+            target_stamp = path_stamp(target)
+            if source_stamp is None:
+                raise RuntimeError("Source folder no longer exists. Compare the directories again.")
+            if target_stamp is not None and target_stamp[0] not in (stat.S_IFDIR, stat.S_IFREG):
+                raise RuntimeError("Destination changed type. Compare the directories again.")
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Cannot copy folder", str(exc))
+            return
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning if target_stamp is not None else QMessageBox.Icon.Question)
+        dialog.setWindowTitle("Replace folder" if target_stamp is not None else "Copy folder")
+        dialog.setText("Replace this folder and all its contents?" if target_stamp is not None
+                       else "Copy this folder and all its contents?")
+        detail = "Files present only at the destination will be removed. " if target_stamp is not None else ""
+        dialog.setInformativeText(f"{detail}Hidden and ignored files are included.\nFrom: {source}\nTo: {target}")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        if dialog.exec() != QMessageBox.StandardButton.Yes:
+            return
+        self._directory_copy_busy = True
+        self._refresh_toolbar()
+        roots = (view.left_path.text(), view.right_path.text())
+
+        def done(result):
+            _copied, leftover = result
+            self._directory_copy_busy = False
+            if roots == (view.left_path.text(), view.right_path.text()):
+                view.compare()
+            self._refresh_toolbar()
+            if leftover is not None:
+                QMessageBox.warning(self, "Old folder retained", f"Folder copied, but the old folder remains at {leftover}")
+            else:
+                self.statusBar().showMessage(f"Copied folder {entry.relative_path} to {'left' if to_left else 'right'}")
+
+        def failed(message):
+            self._directory_copy_busy = False
+            self._refresh_toolbar()
+            QMessageBox.critical(self, "Folder copy failed", message)
+
+        self.scheduler.submit_file(
+            ("directory-copy", id(self)), copy_directory_checked,
             (source, target_root, entry.relative_path, source_stamp, target_stamp), done, failed,
         )
 
@@ -933,6 +1234,7 @@ class MainWindow(QMainWindow):
             self._syntax_timers[editor].start()
             self._refresh_titles()
             self.statusBar().showMessage(f"Opened {path.name}")
+            self._recent_timer.start()
 
         def failed(message):
             self._busy_files.discard(id(editor))
@@ -984,6 +1286,7 @@ class MainWindow(QMainWindow):
             self._syntax_timers[editor].start()
             self._refresh_titles()
             self.statusBar().showMessage(f"Saved {path.name}")
+            self._recent_timer.start()
 
         def failed(message):
             self._busy_files.discard(id(editor))
