@@ -1,8 +1,9 @@
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, QTimer, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -19,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diffly.core.diff.engine import DiffResult, delete_hunk_text, transfer_text
+from diffly.core.diff.engine import DiffResult, compare, delete_hunk_text, transfer_text
 from diffly.core.documents.syntax import language_for
+from diffly.gui.diff_gutter import DiffGutter
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.directory_comparison import DirectoryComparisonView
 from diffly.gui.editor_widget import EditorWidget
@@ -42,9 +44,55 @@ ENCODINGS = (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
              ("Windows-1250", "cp1250"), ("Shift JIS", "shift_jis"))
 
 
+def _suppress_dialogs():
+    """DIFFLY_NO_DIALOGS=1: never block on a modal dialog in tests or scripted runs.
+
+    Questions answer Yes, notices go to stderr, file pickers cancel.
+    """
+    def notice(_parent, title, text, *_args, **_kwargs):
+        print(f"[diffly] {title}: {text}", file=sys.stderr)
+        return QMessageBox.StandardButton.Ok
+
+    def question(_parent, title, text, *_args, **_kwargs):
+        print(f"[diffly] {title}: {text} -> Yes", file=sys.stderr)
+        return QMessageBox.StandardButton.Yes
+
+    def message_box_exec(box):
+        print(f"[diffly] {box.windowTitle()}: {box.text()} -> Yes", file=sys.stderr)
+        return QMessageBox.StandardButton.Yes
+
+    QMessageBox.information = QMessageBox.warning = QMessageBox.critical = staticmethod(notice)
+    QMessageBox.question = staticmethod(question)
+    QMessageBox.exec = message_box_exec
+    QFileDialog.getOpenFileName = QFileDialog.getSaveFileName = staticmethod(lambda *_args, **_kwargs: ("", ""))
+    QFileDialog.getExistingDirectory = staticmethod(lambda *_args, **_kwargs: "")
+
+
+def _shift_held() -> bool:
+    return bool(QGuiApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+
+class _ShiftWatcher(QObject):
+    """App-wide Shift tracking, so toolbar icons switch to append while Shift is down."""
+
+    def __init__(self, callback, parent):
+        super().__init__(parent)
+        self._callback = callback
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_Shift:
+            self._callback(event.type() == QEvent.Type.KeyPress)
+        elif event.type() == QEvent.Type.ApplicationStateChange:
+            # Shift may be released while another app is focused.
+            self._callback(_shift_held())
+        return False
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        if os.environ.get("DIFFLY_NO_DIALOGS"):
+            _suppress_dialogs()
         self.setWindowTitle("Diffly")
         self.resize(1100, 720)
         self._linux_titlebar = None
@@ -79,6 +127,8 @@ class MainWindow(QMainWindow):
         self._serial = 0
         self._native_toolbar_attempts = 0
         self._native_toolbar_bridge = None
+        self._append_mode = False
+        QApplication.instance().installEventFilter(_ShiftWatcher(self._set_append_mode, self))
 
         self.left_title = QLabel()
         self.right_title = QLabel()
@@ -91,18 +141,21 @@ class MainWindow(QMainWindow):
         layout.setHorizontalSpacing(1)
         layout.setVerticalSpacing(0)
         layout.addWidget(self.left_title, 0, 0)
-        layout.addWidget(self.right_title, 0, 1)
+        layout.addWidget(self.right_title, 0, 2)
         layout.addWidget(self.left, 1, 0)
-        layout.addWidget(self.right, 1, 1)
+        layout.addWidget(self.right, 1, 2)
         self.shared_scrollbar = QScrollBar(Qt.Orientation.Vertical, root)
         self.shared_scrollbar.hide()
+        self.gutter = DiffGutter(self.left.editor, self.right.editor, self.shared_scrollbar, root)
+        self.gutter.transfer_requested.connect(self._transfer)
+        layout.addWidget(self.gutter, 1, 1)
         self.overview = DiffOverview(self.left.editor, self.right.editor, self.shared_scrollbar, root)
-        layout.addWidget(self.overview, 1, 2)
+        layout.addWidget(self.overview, 1, 3)
         self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
         self.shared_horizontal_scrollbar.installEventFilter(self)
-        layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 2)
+        layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 3)
         layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 1)
         layout.setRowStretch(1, 1)
         self.file_comparison = root
         self.directory_comparison = DirectoryComparisonView(
@@ -202,6 +255,8 @@ class MainWindow(QMainWindow):
             ("Previous Difference", "Ctrl+Alt+Up", lambda: self._navigate(-1)),
             ("Apply Right to Left", "Ctrl+Alt+Left", lambda: self._transfer(self._selected_hunk, False)),
             ("Apply Left to Right", "Ctrl+Alt+Right", lambda: self._transfer(self._selected_hunk, True)),
+            ("Append Right Below Left", "Ctrl+Alt+Shift+Left", lambda: self._transfer(self._selected_hunk, False, True)),
+            ("Append Left Below Right", "Ctrl+Alt+Shift+Right", lambda: self._transfer(self._selected_hunk, True, True)),
             ("Delete Selected Block", "Ctrl+Alt+Delete", lambda: self._delete_selected(self._selected_hunk)),
         ):
             action = QAction(label, self)
@@ -255,8 +310,8 @@ class MainWindow(QMainWindow):
         spacer = QWidget(toolbar)
         spacer.setFixedWidth(12)
         toolbar.addWidget(spacer)
-        self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(self._selected_hunk, False))
-        self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(self._selected_hunk, True))
+        self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(self._selected_hunk, False, _shift_held()))
+        self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(self._selected_hunk, True, _shift_held()))
         spacer = QWidget(toolbar)
         spacer.setFixedWidth(12)
         toolbar.addWidget(spacer)
@@ -289,6 +344,7 @@ class MainWindow(QMainWindow):
             self.next_action.setToolTip(f"Next different file ({modifier}+Down)")
             self.apply_left_action.setToolTip(f"Copy selected file from right to left ({modifier}+Left)")
             self.apply_right_action.setToolTip(f"Copy selected file from left to right ({modifier}+Right)")
+            self._set_transfer_icons(False)
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
             return
@@ -304,10 +360,34 @@ class MainWindow(QMainWindow):
         modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
         self.previous_action.setToolTip(f"Previous difference ({modifier}+Up)")
         self.next_action.setToolTip(f"Next difference ({modifier}+Down)")
-        self.apply_left_action.setToolTip(f"Copy selected right block to left ({modifier}+Left)")
-        self.apply_right_action.setToolTip(f"Copy selected left block to right ({modifier}+Right)")
+        if self._append_mode:
+            self.apply_left_action.setToolTip(f"Append selected right block below left ({modifier}+Shift+Left)")
+            self.apply_right_action.setToolTip(f"Append selected left block below right ({modifier}+Shift+Right)")
+        else:
+            self.apply_left_action.setToolTip(f"Copy selected right block to left ({modifier}+Left, Shift to append below)")
+            self.apply_right_action.setToolTip(f"Copy selected left block to right ({modifier}+Right, Shift to append below)")
+        self._set_transfer_icons(self._append_mode)
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.sync()
+
+    def _set_append_mode(self, on: bool):
+        if on != self._append_mode:
+            self._append_mode = on
+            self.gutter.set_append(on)
+            self._refresh_toolbar()
+
+    def _set_transfer_icons(self, append: bool):
+        for action, identifier, kind in (
+            (self.apply_left_action, "diffly.apply_left", "left"),
+            (self.apply_right_action, "diffly.apply_right", "right"),
+        ):
+            kind = f"{'append' if append else 'apply'}_{kind}"
+            if self._toolbar_icons[action] == kind:
+                continue
+            self._toolbar_icons[action] = kind
+            action.setIcon(toolbar_icon(kind, self.config.themes[self._active_theme_name]["text"]))
+            if self._native_toolbar_bridge is not None:
+                self._native_toolbar_bridge.set_symbol(identifier, kind)
 
     def _apply_theme(self, name: str):
         if name not in self.config.themes:
@@ -326,6 +406,7 @@ class MainWindow(QMainWindow):
             editor.set_font(font, tab_width, indent_guide_width)
             editor.set_theme(theme)
         self.overview.set_theme(theme)
+        self.gutter.set_theme(theme)
         self.directory_comparison.set_theme(theme)
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.set_theme(theme)
@@ -462,12 +543,14 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event):
         if (watched in (self.left.editor, self.right.editor)
                 and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress)
-                and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+                and event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier
+                == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            append = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             commands = {
                 Qt.Key.Key_Up: lambda: self._navigate(-1),
                 Qt.Key.Key_Down: lambda: self._navigate(1),
-                Qt.Key.Key_Left: lambda: self._transfer(self._selected_hunk, False),
-                Qt.Key.Key_Right: lambda: self._transfer(self._selected_hunk, True),
+                Qt.Key.Key_Left: lambda: self._transfer(self._selected_hunk, False, append),
+                Qt.Key.Key_Right: lambda: self._transfer(self._selected_hunk, True, append),
             }
             command = commands.get(event.key())
             if command is not None:
@@ -597,6 +680,8 @@ class MainWindow(QMainWindow):
         self._selected_hunk = -1
         self.left.editor.set_placeholder_ranges(())
         self.right.editor.set_placeholder_ranges(())
+        # Arrows would point at stale lines until the next diff arrives.
+        self.gutter.set_hunks(())
         self._update_shared_scroll_range()
         self._refresh_toolbar()
         self._refresh_stats()
@@ -642,6 +727,7 @@ class MainWindow(QMainWindow):
         self.right.show_hunks(result.hunks, False, result.right_spans)
         self._update_shared_scroll_range()
         self.overview.set_hunks(result.hunks)
+        self.gutter.set_hunks(result.hunks)
         self._cursor_hunk_changed(self.left if self._last_active_side == "left" else self.right)
         self.statusBar().showMessage(f"{len(result.hunks)} difference(s)")
 
@@ -700,7 +786,7 @@ class MainWindow(QMainWindow):
             row = (current + step) % len(self._diff.hunks)
         self._select_hunk(row)
 
-    def _transfer(self, row: int, source_is_left: bool):
+    def _transfer(self, row: int, source_is_left: bool, append: bool = False):
         if self.tabs.currentWidget() is self.directory_comparison:
             self._copy_selected_file(to_left=not source_is_left)
             return
@@ -715,10 +801,25 @@ class MainWindow(QMainWindow):
             return
         source = self.left if source_is_left else self.right
         target = self.right if source_is_left else self.left
-        new_text = transfer_text(source.text(), target.text(), result.hunks[row], source_is_left)
+        new_text = transfer_text(source.text(), target.text(), result.hunks[row], source_is_left, append)
+        self._apply_in_place(target, new_text)
+        self.statusBar().showMessage(f"Block {'appended' if append else 'copied'}; use Undo to revert")
+
+    def _apply_in_place(self, target: EditorWidget, new_text: str):
+        """Edit one pane without moving the view, so the result can be checked where it was."""
+        vertical = self.shared_scrollbar.value()
+        horizontal = self.shared_horizontal_scrollbar.value()
         target.apply_text(new_text)
+        left, right = self.left.text(), self.right.text()
+        # ponytail: diff on the GUI thread so alignment settles before the next repaint;
+        # above 2 MB the async path keeps the UI responsive and the view may shift once.
+        if len(left) + len(right) <= 2_000_000:
+            self.debounce.stop()
+            self._accept_diff(compare(left, right, self.left.state.revision, self.right.state.revision))
+        self.shared_scrollbar.setValue(vertical)
+        self._scroll_both(self.shared_scrollbar.value())
+        self._scroll_both_horizontal(horizontal)
         target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
-        self.statusBar().showMessage("Block copied; use Undo to revert")
 
     def _copy_selected_file(self, to_left: bool):
         view = self.directory_comparison
@@ -789,8 +890,7 @@ class MainWindow(QMainWindow):
         target = self.left if target_is_left else self.right
         new_text = delete_hunk_text(target.text(), result.hunks[row], target_is_left)
         if new_text != target.text():
-            target.apply_text(new_text)
-            target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+            self._apply_in_place(target, new_text)
             self.statusBar().showMessage("Block deleted; use Undo to revert")
 
     def _confirm_discard(self, editor: EditorWidget) -> bool:

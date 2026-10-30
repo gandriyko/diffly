@@ -34,11 +34,12 @@ python3 -m venv .venv
 To build a macOS app that can launch from Applications:
 
 ```sh
-scripts/build-macos-app.sh
-open dist
+scripts/build-macos-app.sh                    # build dist/Diffly.app only
+scripts/build-macos-app.sh --install          # also replace /Applications/Diffly.app
+scripts/build-macos-app.sh --install --open   # install and launch it
 ```
 
-When run in a terminal, the script asks whether to install the app; answering `y` replaces `/Applications/Diffly.app` with the new build. Otherwise, drag `Diffly.app` from the opened `dist` folder into Applications in Finder. The build includes Python, Qt, and the bundled theme configuration, so the `.app` does not depend on this repository or its virtual environment. Run the build again after code changes and replace the copy in Applications. The app is built for the current Mac's CPU architecture and is signed locally; distributing it to other Macs requires Developer ID signing and notarization.
+Without `--install`, drag `Diffly.app` from the `dist` folder into Applications in Finder. The build includes Python, Qt, and the bundled theme configuration, so the `.app` does not depend on this repository or its virtual environment. Run the build again after code changes and replace the copy in Applications. The app is built for the current Mac's CPU architecture and is signed locally; distributing it to other Macs requires Developer ID signing and notarization.
 
 Open one or two files directly from the command line:
 
@@ -97,3 +98,5 @@ Alternatively, install the development dependencies with pip:
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
+
+Set `DIFFLY_NO_DIALOGS=1` for scripted or automated runs: modal dialogs are not shown, questions answer Yes, notices are printed to stderr and file pickers cancel. The test suite enables it in `tests/conftest.py`.

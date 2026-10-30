@@ -11,6 +11,17 @@ def test_bidirectional_block_transfer():
     assert transfer_text(right, left, result.hunks[0], True) == right
 
 
+def test_append_keeps_target_block_above_source_block():
+    left = "a\nleft\nz\n"
+    right = "a\nright\nz\n"
+    hunk = compare(left, right, 0, 0).hunks[0]
+    assert transfer_text(left, right, hunk, True, append=True) == "a\nright\nleft\nz\n"
+    assert transfer_text(right, left, hunk, False, append=True) == "a\nleft\nright\nz\n"
+    # Target block at end of file without a trailing newline.
+    hunk = compare("a\nleft\n", "a\nright", 0, 0).hunks[0]
+    assert transfer_text("a\nleft\n", "a\nright", hunk, True, append=True) == "a\nright\nleft\n"
+
+
 def test_insert_and_delete_blocks():
     left = "a\nextra\nz\n"
     right = "a\nz\n"

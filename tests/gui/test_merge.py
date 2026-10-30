@@ -1,5 +1,5 @@
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QTextCursor, QWheelEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from diffly.core.diff.engine import compare
@@ -19,6 +19,56 @@ def test_transfer_is_one_undo_step(qtbot, monkeypatch):
     assert window.right.text() == window.left.text()
     window.right.editor.undo()
     assert window.right.text() == "one\nright\n"
+    window.close()
+
+
+def test_gutter_arrow_transfers_and_shift_appends(qtbot):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window.left.load_text("one\nleft\n")
+    window.right.load_text("one\nright\n")
+    window._accept_diff(compare(window.left.text(), window.right.text(), window.left.state.revision, window.right.state.revision))
+    top = window.gutter._band(window._diff.hunks[0])[0]
+    point = window.gutter.button_rect(top, True).center().toPoint()
+    qtbot.mouseClick(window.gutter, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, point)
+    assert window.right.text() == "one\nright\nleft\n"
+
+    window._accept_diff(compare(window.left.text(), window.right.text(), window.left.state.revision, window.right.state.revision))
+    top = window.gutter._band(window._diff.hunks[0])[0]
+    point = window.gutter.button_rect(top, False).center().toPoint()
+    qtbot.mouseClick(window.gutter, Qt.MouseButton.LeftButton, pos=point)
+    assert window.left.text() == window.right.text()
+    window.close()
+
+
+def test_transfer_keeps_view_in_place_and_selects_inserted_text(qtbot):
+    window = MainWindow()
+    window.tabs.setCurrentWidget(window.file_comparison)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    body = "".join(f"line {i}\n" for i in range(300))
+    # An insertion high up gives the right pane a placeholder that must survive the edit.
+    left = "only left\n" + body + "old\n" + body
+    right = body + "new\n" + body
+    window.left.load_text(left)
+    window.right.load_text(right)
+    window._accept_diff(compare(left, right, window.left.state.revision, window.right.state.revision))
+    window._select_hunk(1)
+    view = window.shared_scrollbar.value() + 3
+    # Leave the right cursor far above the view: the edit must not scroll to it.
+    window.right.editor.setTextCursor(QTextCursor(window.right.editor.document()))
+    window.shared_scrollbar.setValue(view)
+    before = window.shared_scrollbar.value()
+    assert before > 100
+
+    window._transfer(1, True)
+    assert window.shared_scrollbar.value() == before
+    assert window.right.editor.textCursor().selectedText() == "old"
+    assert window.right.editor.placeholder_ranges == ((0, 1),)
     window.close()
 
 

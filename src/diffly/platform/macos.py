@@ -17,6 +17,15 @@ if sys.platform == "darwin":
             1,
         )
 
+    def _ns_image(kind):
+        png = native_icon_png(kind)
+        data = AppKit.NSData.dataWithBytes_length_(png, len(png))
+        image = AppKit.NSImage.alloc().initWithData_(data)
+        if image is not None:
+            image.setSize_(AppKit.NSMakeSize(24, 24))
+            image.setTemplate_(True)
+        return image
+
     class _DifflyToolbarDelegate(AppKit.NSObject):
         def toolbarAllowedItemIdentifiers_(self, toolbar):
             return list(self.identifiers)
@@ -30,12 +39,7 @@ if sys.platform == "darwin":
             item.setLabel_(action.text())
             item.setPaletteLabel_(action.text())
             item.setToolTip_(action.toolTip())
-            png = native_icon_png(self.symbols[identifier])
-            data = AppKit.NSData.dataWithBytes_length_(png, len(png))
-            image = AppKit.NSImage.alloc().initWithData_(data)
-            if image is not None:
-                image.setSize_(AppKit.NSMakeSize(24, 24))
-                image.setTemplate_(True)
+            image = _ns_image(self.symbols[identifier])
             button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 34, 30))
             button.setTitle_("")
             button.setToolTip_(action.toolTip())
@@ -144,6 +148,13 @@ class NativeToolbar:
                 button.layer().setBorderWidth_(0.0)
                 self.delegate.hovered.discard(identifier)
         self.toolbar.validateVisibleItems()
+
+    def set_symbol(self, identifier, kind):
+        self.delegate.symbols[identifier] = kind
+        button = self.delegate.buttons.get(identifier)
+        image = _ns_image(kind)
+        if button is not None and image is not None:
+            button.setImage_(image)
 
     def set_theme(self, theme):
         self.delegate.normal_tint = _ns_color(theme["text"])

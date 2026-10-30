@@ -50,6 +50,22 @@ def _pixmap(kind: str, color: str) -> QPixmap:
             painter.drawLine(QPointF(4, 12), QPointF(20, 12))
             painter.drawLine(QPointF(14, 6), QPointF(20, 12))
             painter.drawLine(QPointF(20, 12), QPointF(14, 18))
+    elif kind in ("append_left", "append_right"):
+        # Shift variant: the arrow moves up and a plus below says "add under", not "replace".
+        arrow_pen = QPen(ink, 2.2)
+        arrow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        arrow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(arrow_pen)
+        if kind == "append_left":
+            painter.drawLine(QPointF(20, 8), QPointF(4, 8))
+            painter.drawLine(QPointF(9, 3.5), QPointF(4, 8))
+            painter.drawLine(QPointF(4, 8), QPointF(9, 12.5))
+        else:
+            painter.drawLine(QPointF(4, 8), QPointF(20, 8))
+            painter.drawLine(QPointF(15, 3.5), QPointF(20, 8))
+            painter.drawLine(QPointF(20, 8), QPointF(15, 12.5))
+        painter.drawLine(QPointF(12, 14.5), QPointF(12, 21.5))
+        painter.drawLine(QPointF(8.5, 18), QPointF(15.5, 18))
     else:
         target_left = kind.endswith("left")
         frame_color = QColor(ink)

@@ -139,6 +139,17 @@ class CodeEditor(QPlainTextEdit):
         index = bisect_right(self._gap_starts, block_number) - 1
         return block_number + (self._gap_totals[index] if index >= 0 else 0)
 
+    def line_height(self) -> float:
+        return self._aligned_layout.line_height or self.fontMetrics().height()
+
+    def line_top(self, block_number: int) -> float | None:
+        """Viewport y of a real line's text, below any placeholder gap before it."""
+        block = self.document().findBlockByNumber(block_number)
+        if not block.isValid():
+            return None
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        return top + (self._aligned_layout.before_first if block_number == 0 else 0)
+
     def block_for_visual_row(self, row: int) -> int:
         index = bisect_right(self._visual_gap_starts, row) - 1
         if index < 0:

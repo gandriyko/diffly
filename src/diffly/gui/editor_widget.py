@@ -57,13 +57,27 @@ class EditorWidget(QWidget):
         self.highlighter.set_theme(theme)
 
     def apply_text(self, text: str):
-        cursor = self.editor.textCursor()
-        old_position = cursor.position()
-        cursor.beginEditBlock()
-        cursor.select(QTextCursor.SelectionType.Document)
-        cursor.insertText(text)
-        cursor.endEditBlock()
-        cursor.setPosition(min(old_position, len(text)))
+        """Replace only the changed middle as one undo step and select what was inserted."""
+        old = self.text()
+        start = 0
+        limit = min(len(old), len(text))
+        while start < limit and old[start] == text[start]:
+            start += 1
+        old_end, new_end = len(old), len(text)
+        while old_end > start and new_end > start and old[old_end - 1] == text[new_end - 1]:
+            old_end -= 1
+            new_end -= 1
+
+        def position(value: str, index: int) -> int:
+            # QTextCursor counts UTF-16 code units.
+            return len(value[:index].encode("utf-16-le")) // 2
+
+        cursor = QTextCursor(self.editor.document())
+        cursor.setPosition(position(old, start))
+        cursor.setPosition(position(old, old_end), QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(text[start:new_end])
+        cursor.setPosition(position(text, start))
+        cursor.setPosition(position(text, new_end), QTextCursor.MoveMode.KeepAnchor)
         self.editor.setTextCursor(cursor)
 
     def show_hunks(self, hunks: tuple[Hunk, ...], left: bool, spans: tuple[TextSpan, ...] = ()):

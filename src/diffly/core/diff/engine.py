@@ -103,8 +103,11 @@ def compare(left: str, right: str, left_revision: int, right_revision: int) -> D
     )
 
 
-def transfer_text(source: str, target: str, hunk: Hunk, source_is_left: bool) -> str:
-    """Return target text after transferring one whole hunk."""
+def transfer_text(source: str, target: str, hunk: Hunk, source_is_left: bool, append: bool = False) -> str:
+    """Return target text after transferring one whole hunk.
+
+    With ``append`` the target block is kept and the source block goes below it.
+    """
     source_lines = source.splitlines(keepends=True)
     target_lines = target.splitlines(keepends=True)
     source_start, source_end = (
@@ -113,6 +116,11 @@ def transfer_text(source: str, target: str, hunk: Hunk, source_is_left: bool) ->
     target_start, target_end = (
         (hunk.right_start, hunk.right_end) if source_is_left else (hunk.left_start, hunk.left_end)
     )
+    if append:
+        target_start = target_end
+        # A last line without a newline would otherwise merge with the appended block.
+        if target_end and not target_lines[target_end - 1].endswith(("\n", "\r")):
+            target_lines[target_end - 1] += "\n"
     target_lines[target_start:target_end] = source_lines[source_start:source_end]
     return "".join(target_lines)
 
