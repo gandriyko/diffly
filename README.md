@@ -1,4 +1,4 @@
-# Diffly
+# <img src="scripts/icon.svg" width="48" height="48" alt="" align="absmiddle"> Diffly
 
 <a href="docs/images/diffly-json.png"><img src="docs/images/diffly-json.png" alt="Diffly comparing two JSON files" width="600"></a>
 
