@@ -283,7 +283,7 @@ def test_compact_layout_and_status_information(qtbot):
     window.show()
     assert window.tabs.count() == 3
     assert window.file_comparison.layout().contentsMargins().left() == 0
-    assert window.file_comparison.layout().horizontalSpacing() == 1
+    assert window.file_comparison.layout().horizontalSpacing() == 0
     assert "1 changed" in window.summary_label.text()
     assert "1 identical" in window.summary_label.text()
     assert not window.findChildren(QToolButton, "IndentWidthButton")

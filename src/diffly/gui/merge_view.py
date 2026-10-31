@@ -6,11 +6,12 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QSplitter, QTextEdit, QVBoxLayout, QWidget, QMenu)
+                               QPushButton, QSplitter, QSplitterHandle, QTextEdit, QToolButton,
+                               QVBoxLayout, QWidget, QMenu)
 
 from diffly.core.documents.syntax import language_for
 from diffly.core.merge.three_way import MergeResult
-from diffly.gui.diff_gutter import ribbon_path
+from diffly.gui.diff_gutter import draw_ribbon
 from diffly.gui.editor_widget import EditorWidget
 from diffly.gui.icons import toolbar_icon
 from diffly.services.file_service import file_stamp, read_merge_file, write_file
@@ -38,6 +39,20 @@ class _RegionState:
     start: int
     end: int
     applied: bool = False
+
+
+class _SeamlessSplitterHandle(QSplitterHandle):
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def paintEvent(self, _event):
+        pass
+
+
+class _SeamlessSplitter(QSplitter):
+    def createHandle(self):
+        return _SeamlessSplitterHandle(self.orientation(), self)
 
 
 class _ConflictOverview(QWidget):
@@ -224,19 +239,18 @@ class _ApplyGutter(QWidget):
             else:
                 left_top, left_bottom = result_top, result_bottom
                 right_top, right_bottom = source_top, source_bottom
-            path = ribbon_path(width, left_top, left_bottom, right_top, right_bottom)
             if region.record.conflict_id is not None:
-                color = QColor(self.view.result.theme.get("diff_removed", "#593a35"))
-                edge = QColor(self.view.result.theme.get("overview_removed", "#cc241d"))
+                conflict = self.view._conflicts[region.record.conflict_id - 1]
+                unresolved = conflict.state.endswith("unresolved")
+                color_key = "diff_removed" if unresolved else "diff_added"
+                edge_key = "overview_removed" if unresolved else "overview_added"
             else:
-                key = "overview_removed" if self.side == "left" else "overview_added"
-                color = QColor(self.view.result.theme.get(key, "#d79921"))
-                edge = QColor(color)
-                edge.setAlpha(170)
-                color.setAlpha(70)
-            painter.setPen(QPen(edge, 1))
-            painter.setBrush(color)
-            painter.drawPath(path)
+                color_key = "selection"
+                edge_key = "overview_removed" if self.side == "left" else "overview_added"
+            color = QColor(self.view.result.theme[color_key])
+            edge = QColor(self.view.result.theme[edge_key])
+            edge.setAlpha(170)
+            draw_ribbon(painter, width, left_top, left_bottom, right_top, right_bottom, color, edge)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -308,7 +322,11 @@ class MergeView(QWidget):
         self.buttons["Reload Sources"] = QAction("Reload Merge Sources", self)
         self.buttons["Reload Sources"].triggered.connect(self.reload_sources)
         add_button("Save Result", "Save Result", self.save)
-        self.encoding_button = QPushButton("Encoding", self)
+        self.encoding_button = QToolButton(self)
+        self.encoding_button.setObjectName("EncodingButton")
+        self.encoding_button.setAutoRaise(True)
+        self.encoding_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.encoding_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         encoding_menu = QMenu(self.encoding_button)
         encoding_menu.addAction("Auto (Left)", lambda: self._set_encoding(self._loaded[1].encoding if self._loaded else "utf-8"))
         for label, encoding in (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
@@ -339,7 +357,7 @@ class MergeView(QWidget):
         right_panel, right_layout, right_title = make_panel("Right", self.sources[2])
         self.titles = (base_title, left_title, right_title)
         for editor in (*self.sources, self.result):
-            editor.editor.document().setDocumentMargin(0)
+            editor.editor.document().setDocumentMargin(4)
             editor.editor.set_line_numbers_visible(self.line_numbers_visible)
             editor.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             editor.editor.installEventFilter(self)
@@ -354,7 +372,7 @@ class MergeView(QWidget):
         self.overview = _ConflictOverview(self)
         right_row.addWidget(self.overview)
         right_layout.addLayout(right_row, 1)
-        top = QSplitter(Qt.Orientation.Horizontal, self)
+        top = _SeamlessSplitter(Qt.Orientation.Horizontal, self)
         top.setHandleWidth(0)
         left_panel.setMinimumWidth(150)
         center_panel.setMinimumWidth(220)
@@ -370,7 +388,6 @@ class MergeView(QWidget):
         base_panel.hide()
         outer.addWidget(top, 1)
         self.footer = QLabel("0 conflicts · 0 unresolved")
-        outer.addWidget(self.footer)
         self.result.editor.document().contentsChange.connect(self._result_changed)
         for pane in (self.sources[1], self.result, self.sources[2]):
             pane.editor.verticalScrollBar().valueChanged.connect(
@@ -420,6 +437,7 @@ class MergeView(QWidget):
             editor.set_font(font, tab_width, guide_width)
         self.left_gutter.update_icons()
         self.right_gutter.update_icons()
+        self._update_status()
         self._paint_conflicts()
 
     def set_line_numbers_visible(self, visible: bool):
@@ -813,6 +831,7 @@ class MergeView(QWidget):
             selection = QTextEdit.ExtraSelection()
             selection.cursor = cursor
             selection.format.setBackground(QColor(self.result.theme.get("selection", "#504945")))
+            selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
             selections.append(selection)
         for conflict in self._conflicts:
             key = "diff_removed" if conflict.state.endswith("unresolved") else "diff_added"
@@ -870,8 +889,13 @@ class MergeView(QWidget):
         count = len(self._conflicts)
         unresolved = sum(c.state.endswith("unresolved") for c in self._conflicts)
         selected = self._conflicts[self._selected] if 0 <= self._selected < count else None
-        self.footer.setText(f"{count} conflicts · {unresolved} unresolved" +
-                            (f" · conflict {self._selected + 1}: {selected.state}" if selected else ""))
+        theme = self.result.theme
+        self.footer.setText(
+            f'<span style="color:{theme.get("overview_removed", "#cc241d")}">●</span> '
+            f'{count} conflict{"s" if count != 1 else ""}  '
+            f'<span style="color:{theme.get("overview_replace", "#d79921")}">●</span> {unresolved} unresolved'
+            + (f"  ·  conflict {self._selected + 1}: {selected.state}" if selected else "")
+        )
         path = self.result.state.path
         dirty = " •" if self.result.state.dirty else ""
         newline = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}.get(self.result.state.newline, "LF")
@@ -881,7 +905,10 @@ class MergeView(QWidget):
             f"{' BOM' if self.result.state.bom else ''}"
         )
         self.result_title.setToolTip(str(path) if path else "Result has not been saved")
-        self.encoding_button.setText(self.result.state.encoding.upper())
+        self.encoding_button.setText(
+            f"Encoding: {self.result.state.encoding.upper()}"
+            f"{' BOM' if self.result.state.bom else ''}"
+        )
         self.encoding_button.setToolTip(
             f"Result encoding: {self.result.state.encoding}; "
             f"newline: {repr(self.result.state.newline)}; "

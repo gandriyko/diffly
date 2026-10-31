@@ -20,6 +20,23 @@ def ribbon_path(width: float, left_top: float, left_bottom: float,
     return path
 
 
+def draw_ribbon(painter: QPainter, width: float, left_top: float, left_bottom: float,
+                right_top: float, right_bottom: float, color: QColor, edge: QColor):
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawPath(ribbon_path(width, left_top, left_bottom, right_top, right_bottom))
+    # Outline only the curves, leaving the editor-to-gutter joins seamless.
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(edge, 1))
+    middle = width / 2
+    top_edge = QPainterPath(QPointF(0, left_top))
+    top_edge.cubicTo(middle, left_top, middle, right_top, width, right_top)
+    bottom_edge = QPainterPath(QPointF(0, left_bottom))
+    bottom_edge.cubicTo(middle, left_bottom, middle, right_bottom, width, right_bottom)
+    painter.drawPath(top_edge)
+    painter.drawPath(bottom_edge)
+
+
 class DiffGutter(QWidget):
     # row, source_is_left, append
     transfer_requested = Signal(int, bool, bool)
@@ -121,14 +138,10 @@ class DiffGutter(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         width = self.width()
         for row, hunk, left_top, left_bottom, right_top, right_bottom in self._visible():
-            path = ribbon_path(width, left_top, left_bottom, right_top, right_bottom)
-            color = QColor(c[{"insert": "overview_added", "delete": "overview_removed"}.get(hunk.tag, "overview_replace")])
-            edge = QColor(color)
+            color = QColor(c[{"insert": "diff_added", "delete": "diff_removed"}.get(hunk.tag, "diff_replace")])
+            edge = QColor(c[{"insert": "overview_added", "delete": "overview_removed"}.get(hunk.tag, "overview_replace")])
             edge.setAlpha(170)
-            color.setAlpha(70)
-            painter.setPen(QPen(edge, 1))
-            painter.setBrush(color)
-            painter.drawPath(path)
+            draw_ribbon(painter, width, left_top, left_bottom, right_top, right_bottom, color, edge)
             for source_is_left, kind in ((True, "right"), (False, "left")):
                 rect = self.button_rect(left_top if source_is_left else right_top, source_is_left)
                 if self._hover == (row, source_is_left):

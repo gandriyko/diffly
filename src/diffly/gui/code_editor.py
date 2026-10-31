@@ -2,8 +2,8 @@
 
 from bisect import bisect_right
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QPainter, QPen, QTextCharFormat
 from PySide6.QtWidgets import QFrame, QPlainTextDocumentLayout, QPlainTextEdit, QWidget
 
 
@@ -176,12 +176,39 @@ class CodeEditor(QPlainTextEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        self._paint_selection_edges(event)
         if not self.theme:
             return
         if self.syntax_language is not None:
             self._paint_indent_guides(event)
         self._paint_placeholders(event)
         self._paint_merge_conflict_borders(event)
+
+    def _paint_selection_edges(self, event):
+        """Continue full-line highlights through the document's text padding."""
+        margin = round(self.document().documentMargin())
+        if margin <= 0:
+            return
+        painter = QPainter(self.viewport())
+        painter.setClipRect(event.rect())
+        width = self.viewport().width()
+        first_visible = self.firstVisibleBlock().blockNumber()
+        last_visible = self.cursorForPosition(QPoint(0, self.viewport().height() - 1)).blockNumber()
+        for selection in self.extraSelections():
+            if not selection.format.property(QTextCharFormat.Property.FullWidthSelection):
+                continue
+            color = selection.format.background().color()
+            first = selection.cursor.selectionStart()
+            last = max(first, selection.cursor.selectionEnd() - 1)
+            start = self.document().findBlock(first).blockNumber()
+            end = self.document().findBlock(last).blockNumber()
+            for line in range(max(start, first_visible), min(end, last_visible) + 1):
+                top = self.line_top(line)
+                if top is None:
+                    continue
+                area = QRectF(0, top, margin, self.line_height())
+                painter.fillRect(area, color)
+                painter.fillRect(QRectF(width - margin, top, margin, self.line_height()), color)
 
     def _paint_merge_conflict_borders(self, event):
         if not self.merge_conflict_ranges:

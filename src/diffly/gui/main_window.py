@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         root.setObjectName("DifflyRoot")
         layout = QGridLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(1)
+        layout.setHorizontalSpacing(0)
         layout.setVerticalSpacing(0)
         layout.addWidget(self.left_title, 0, 0)
         layout.addWidget(self.right_title, 0, 2)
@@ -221,6 +221,7 @@ class MainWindow(QMainWindow):
             self.merge_view.hide()
         self.merge_view.paths_changed.connect(self._remember_merge)
         self.merge_view.status_changed.connect(self.statusBar().showMessage)
+        self.statusBar().addPermanentWidget(self.merge_view.footer)
         self.statusBar().addPermanentWidget(self.merge_view.encoding_button)
         self.settings_page = SettingsPage(self.config.settings, self.config.themes, self)
         self.tabs.addTab(self.settings_page, "Settings")
@@ -838,6 +839,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(merge_active)
         for widget in (self.summary_label, self.encoding_label):
             widget.setVisible(files_active)
+        self.merge_view.footer.setVisible(merge_active)
         self.merge_view.encoding_button.setVisible(merge_active)
         self.directory_summary_label.setVisible(directories_active)
         if self._native_toolbar_bridge is None:

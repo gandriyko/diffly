@@ -268,7 +268,7 @@ def test_meld_layout_has_center_result_and_gutter_actions(qtbot, tmp_path):
     assert view.result.mapToGlobal(view.result.rect().center()).x() < view.sources[2].mapToGlobal(view.sources[2].rect().center()).x()
     assert all(pane.editor.side_width() == 0 and not pane.editor.side_area.isVisible()
                for pane in (*view.sources, view.result))
-    assert all(pane.editor.document().documentMargin() == 0
+    assert all(pane.editor.document().documentMargin() == 4
                for pane in (*view.sources, view.result))
     assert view.left_gutter.parentWidget().handleWidth() == 0
     assert view.overview.mapToGlobal(QPoint(0, 0)).x() >= view.sources[2].mapToGlobal(
