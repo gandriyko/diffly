@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("DifflyRoot")
         layout = QGridLayout(root)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setHorizontalSpacing(0)
         layout.setVerticalSpacing(0)
         layout.addWidget(self.left_title, 0, 0)
@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         self.directory_comparison.stats_changed.connect(self._set_directory_stats)
         self.directory_comparison.message_changed.connect(self._directory_message_changed)
         self.directory_comparison.selection_changed.connect(self._refresh_toolbar)
+        self.directory_comparison.copy_requested.connect(self._copy_directory_entry)
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("ComparisonTabs")
         self.tabs.addTab(self.directory_comparison, "Directories")
@@ -296,6 +297,7 @@ class MainWindow(QMainWindow):
     def _make_menu(self):
         menu_bar = self._linux_titlebar.menu_bar if self._linux_titlebar is not None else self.menuBar()
         file_menu = menu_bar.addMenu("File")
+        self.file_actions = {}
         for label, shortcut, callback in (
             ("Open Left…", "Ctrl+O", lambda: self._open(self.left)),
             ("Open Right…", "Ctrl+Shift+O", lambda: self._open(self.right)),
@@ -307,8 +309,9 @@ class MainWindow(QMainWindow):
                 action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             file_menu.addAction(action)
+            self.file_actions[label] = action
         file_menu.addSeparator()
-        file_menu.addAction("Save Comparison…", self._save_comparison)
+        self.save_comparison_action = file_menu.addAction("Save Comparison…", self._save_comparison)
         self.saved_menu = file_menu.addMenu("Saved Comparisons")
         self.recent_menu = file_menu.addMenu("Recent Comparisons")
         self._refresh_session_menus()
@@ -316,6 +319,7 @@ class MainWindow(QMainWindow):
         self.merge_recreate_action = file_menu.addAction("Recreate Merge Result", self.merge_view.recreate)
         self.merge_reload_action = file_menu.addAction("Reload Merge Sources", self.merge_view.reload_sources)
         edit_menu = menu_bar.addMenu("Edit")
+        self.undo_redo_actions = []
         for label, shortcut, operation in (
             ("Undo", "Ctrl+Z", "undo"),
             ("Redo", "Ctrl+Shift+Z", "redo"),
@@ -324,6 +328,7 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, op=operation: getattr(self.focused_editor(), op)())
             edit_menu.addAction(action)
+            self.undo_redo_actions.append(action)
         edit_menu.addSeparator()
         self.merge_actions = []
         for label, shortcut, callback in (
@@ -353,6 +358,7 @@ class MainWindow(QMainWindow):
             edit_menu.addAction(action)
             self.find_actions.append(action)
         edit_menu.addSeparator()
+        self.comparison_actions = {}
         for label, shortcut, callback in (
             ("Next Difference", "Ctrl+Alt+Down", lambda: self._navigate(1)),
             ("Previous Difference", "Ctrl+Alt+Up", lambda: self._navigate(-1)),
@@ -366,6 +372,7 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             edit_menu.addAction(action)
+            self.comparison_actions[label] = action
 
         settings_menu = menu_bar.addMenu("Settings")
         settings_action = settings_menu.addAction("Open Settings")
@@ -412,6 +419,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Comparison settings applied but not saved: {exc}")
 
     def _comparison_entry(self):
+        if self.tabs.currentWidget() is self.settings_page:
+            return None
         if self.tabs.currentWidget() is self.merge_view:
             if self.git_mergetool:
                 return None
@@ -664,6 +673,7 @@ class MainWindow(QMainWindow):
                            self.apply_left_action, self.apply_right_action, self.paste_action,
                            self.delete_left_action, self.delete_right_action):
                 action.setEnabled(False)
+            self._sync_comparison_actions()
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
             return
@@ -689,6 +699,7 @@ class MainWindow(QMainWindow):
             self.apply_left_action.setToolTip(f"Copy selected {left_kind} from right to left ({modifier}+Left)")
             self.apply_right_action.setToolTip(f"Copy selected {right_kind} from left to right ({modifier}+Right)")
             self._set_transfer_icons(False)
+            self._sync_comparison_actions()
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
             return
@@ -711,8 +722,24 @@ class MainWindow(QMainWindow):
             self.apply_left_action.setToolTip(f"Copy selected right block to left ({modifier}+Left, Shift to append below)")
             self.apply_right_action.setToolTip(f"Copy selected left block to right ({modifier}+Right, Shift to append below)")
         self._set_transfer_icons(self._append_mode)
+        self._sync_comparison_actions()
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.sync()
+
+    def _sync_comparison_actions(self):
+        files_active = self.tabs.currentWidget() is self.file_comparison
+        directories_active = self.tabs.currentWidget() is self.directory_comparison
+        for label, source in (
+            ("Next Difference", self.next_action),
+            ("Previous Difference", self.previous_action),
+            ("Apply Right to Left", self.apply_left_action),
+            ("Apply Left to Right", self.apply_right_action),
+        ):
+            self.comparison_actions[label].setEnabled(
+                (files_active or directories_active) and source.isEnabled())
+        for label in ("Append Right Below Left", "Append Left Below Right", "Delete Selected Block"):
+            self.comparison_actions[label].setEnabled(
+                files_active and self.apply_left_action.isEnabled())
 
     def _set_append_mode(self, on: bool):
         if on != self._append_mode:
@@ -844,6 +871,23 @@ class MainWindow(QMainWindow):
         directories_active = self.tabs.widget(index) is self.directory_comparison
         merge_active = self.tabs.widget(index) is self.merge_view
         settings_active = self.tabs.widget(index) is self.settings_page
+        for label in ("Open Left…", "Open Right…"):
+            self.file_actions[label].setEnabled(files_active)
+        self.file_actions["Save"].setEnabled(files_active or merge_active)
+        self.file_actions["Save As…"].setEnabled(
+            files_active or (merge_active and not self.git_mergetool))
+        self.save_comparison_action.setEnabled(
+            not settings_active and not (merge_active and self.git_mergetool))
+        for action in self.undo_redo_actions:
+            action.setEnabled(files_active or merge_active)
+        directory_labels = {
+            "Next Difference": "Next Different File",
+            "Previous Difference": "Previous Different File",
+            "Apply Right to Left": "Copy Right to Left",
+            "Apply Left to Right": "Copy Left to Right",
+        }
+        for label, action in self.comparison_actions.items():
+            action.setText(directory_labels.get(label, label) if directories_active else label)
         if not files_active:
             self.find_panel.hide()
         if not merge_active:
@@ -1290,6 +1334,10 @@ class MainWindow(QMainWindow):
         self._scroll_both(self.shared_scrollbar.value())
         self._scroll_both_horizontal(horizontal)
         target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _copy_directory_entry(self, relative_path: str, to_left: bool):
+        self.directory_comparison.select_path(relative_path)
+        self._copy_selected_entry(to_left)
 
     def _copy_selected_entry(self, to_left: bool):
         view = self.directory_comparison

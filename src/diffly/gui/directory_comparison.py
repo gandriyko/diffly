@@ -3,15 +3,18 @@
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QEvent, QPoint, QRect, QSignalBlocker, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QSplitter, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QStyle, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from diffly.core.directories.compare import DirectoryEntry, compare_directories
 from diffly.core.directories.filters import DEFAULT_PRESETS
+from diffly.gui.diff_gutter import BUTTON
+from diffly.gui.icons import toolbar_icon
+from diffly.gui.seamless_splitter import SeamlessSplitter
 
 
 STATUS_LABELS = {
@@ -20,12 +23,111 @@ STATUS_LABELS = {
 }
 
 
+class DirectoryGutter(QWidget):
+    """Transfer controls aligned with visible rows in the directory trees."""
+
+    transfer_requested = Signal(str, bool)
+
+    def __init__(self, view: "DirectoryComparisonView"):
+        super().__init__(view)
+        self.view = view
+        self._hover: tuple[str, bool] | None = None
+        self._icons = {}
+        self.setFixedWidth(2 * BUTTON + 24)
+        self.setMouseTracking(True)
+        for tree in (view.left_tree, view.right_tree):
+            tree.verticalScrollBar().valueChanged.connect(self.update)
+            tree.verticalScrollBar().rangeChanged.connect(self.update)
+            tree.viewport().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self.update()
+        return super().eventFilter(watched, event)
+
+    def set_theme(self, theme: dict):
+        self._icons = {kind: toolbar_icon(kind, theme["text"])
+                       for kind in ("apply_left", "apply_right")}
+        self.update()
+
+    def _visible_rows(self):
+        tree = self.view.left_tree
+        item = tree.itemAt(0, 0)
+        while item is not None:
+            rect = tree.visualItemRect(item)
+            top = self.mapFromGlobal(tree.viewport().mapToGlobal(QPoint(0, rect.top()))).y()
+            if top >= self.height():
+                break
+            relative = item.data(0, Qt.ItemDataRole.UserRole)
+            entry = self.view._entries.get(relative)
+            if entry is not None and entry.status != "same" and top + rect.height() > 0:
+                yield relative, entry, top, rect.height()
+            item = tree.itemBelow(item)
+
+    def _button_rect(self, top: int, height: int, to_left: bool) -> QRect:
+        x = self.width() - BUTTON - 3 if to_left else 3
+        return QRect(x, top + (height - BUTTON) // 2, BUTTON, BUTTON)
+
+    def paintEvent(self, event):
+        theme = self.view._theme
+        if not theme:
+            return
+        painter = QPainter(self)
+        painter.fillRect(event.rect(), QColor(theme["surface"]))
+        colors = {"different": "diff_replace", "type_changed": "diff_replace",
+                  "left_only": "diff_removed", "right_only": "diff_added"}
+        for relative, entry, top, height in self._visible_rows():
+            painter.fillRect(0, top, self.width(), height, QColor(theme[colors[entry.status]]))
+            for to_left, icon in ((False, "apply_right"), (True, "apply_left")):
+                if not self.view.can_copy_entry(entry, to_left):
+                    continue
+                rect = self._button_rect(top, height, to_left)
+                if self._hover == (relative, to_left):
+                    painter.fillRect(rect.adjusted(-1, -1, 1, 1), QColor(theme["border"]))
+                self._icons[icon].paint(painter, rect)
+
+    def _button_at(self, point) -> tuple[str, bool] | None:
+        for relative, entry, top, height in self._visible_rows():
+            for to_left in (False, True):
+                if (self.view.can_copy_entry(entry, to_left)
+                        and self._button_rect(top, height, to_left).contains(point.toPoint())):
+                    return relative, to_left
+        return None
+
+    def mouseMoveEvent(self, event):
+        hover = self._button_at(event.position())
+        if hover != self._hover:
+            self._hover = hover
+            self.setCursor(Qt.CursorShape.PointingHandCursor if hover else Qt.CursorShape.ArrowCursor)
+            self.setToolTip(f"Copy {hover[0]} {'right to left' if hover[1] else 'left to right'}" if hover else "")
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = None
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        hit = self._button_at(event.position()) if event.button() == Qt.MouseButton.LeftButton else None
+        if hit is None:
+            super().mousePressEvent(event)
+            return
+        self.transfer_requested.emit(*hit)
+        event.accept()
+
+    def wheelEvent(self, event):
+        QApplication.sendEvent(self.view.left_tree.viewport(), event)
+        event.accept()
+
+
 class DirectoryComparisonView(QWidget):
     comparison_ready = Signal(str, str)
     stats_changed = Signal(object)
     message_changed = Signal(str)
     open_files = Signal(object, object)
     selection_changed = Signal()
+    copy_requested = Signal(str, bool)
 
     def __init__(self, scheduler, patterns: list[str], parent=None, use_gitignore: bool = True,
                  enabled_presets: tuple[str, ...] = DEFAULT_PRESETS):
@@ -45,7 +147,7 @@ class DirectoryComparisonView(QWidget):
         self._syncing_selection = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(7)
         self.left_path = QLineEdit(self)
         self.right_path = QLineEdit(self)
@@ -57,12 +159,20 @@ class DirectoryComparisonView(QWidget):
 
         self.left_tree = self._make_tree("Left")
         self.right_tree = self._make_tree("Right")
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        splitter = SeamlessSplitter(Qt.Orientation.Horizontal, self)
+        splitter.setHandleWidth(0)
         self.left_pane = self._make_pane(self.left_path, self.left_tree, "left")
         self.right_pane = self._make_pane(self.right_path, self.right_tree, "right")
+        self.gutter = DirectoryGutter(self)
+        self.gutter.transfer_requested.connect(self.copy_requested)
         splitter.addWidget(self.left_pane)
+        splitter.addWidget(self.gutter)
         splitter.addWidget(self.right_pane)
-        splitter.setSizes([1, 1])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([450, self.gutter.width(), 450])
         layout.addWidget(splitter, 1)
         self.left_tree.itemExpanded.connect(lambda item: self._mirror_expansion(item, self.right_tree, True))
         self.right_tree.itemExpanded.connect(lambda item: self._mirror_expansion(item, self.left_tree, True))
@@ -125,6 +235,7 @@ class DirectoryComparisonView(QWidget):
         self._entries.clear()
         self._navigable_paths.clear()
         self._selected_path = None
+        self.gutter.update()
         self.selection_changed.emit()
         self.stats_changed.emit(None)
         self._set_message("Press Enter in a directory path or use Refresh to compare")
@@ -152,6 +263,7 @@ class DirectoryComparisonView(QWidget):
 
     def set_theme(self, theme: dict):
         self._theme = theme
+        self.gutter.set_theme(theme)
         if self._entries:
             self._color_items()
 
@@ -178,6 +290,7 @@ class DirectoryComparisonView(QWidget):
         self._entries.clear()
         self._navigable_paths.clear()
         self._selected_path = None
+        self.gutter.update()
         self.selection_changed.emit()
         self.stats_changed.emit(None)
         self._set_message("Comparing directories…")
@@ -253,6 +366,7 @@ class DirectoryComparisonView(QWidget):
             self._navigable_paths[0] if self._navigable_paths else None
         )
         self.select_path(chosen)
+        self.gutter.update()
 
     def _select_item(self, item: QTreeWidgetItem | None, source: QTreeWidget):
         if self._syncing_selection:
@@ -290,6 +404,10 @@ class DirectoryComparisonView(QWidget):
 
     def can_copy(self, to_left: bool) -> bool:
         entry = self.selected_entry()
+        return self.can_copy_entry(entry, to_left)
+
+    @staticmethod
+    def can_copy_entry(entry: DirectoryEntry | None, to_left: bool) -> bool:
         if entry is None or entry.status == "same":
             return False
         source_kind = entry.right_kind if to_left else entry.left_kind
@@ -335,6 +453,7 @@ class DirectoryComparisonView(QWidget):
         other_item = pair[0] if other is self.left_tree else pair[1]
         with QSignalBlocker(other):
             other_item.setExpanded(expanded)
+        QTimer.singleShot(0, self.gutter.update)
 
     def _open_item(self, item: QTreeWidgetItem, _column: int):
         entry = self._entries.get(item.data(0, Qt.ItemDataRole.UserRole))

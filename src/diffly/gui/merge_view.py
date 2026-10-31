@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QSplitter, QSplitterHandle, QTextEdit, QToolButton,
+                               QPushButton, QTextEdit, QToolButton,
                                QVBoxLayout, QWidget, QMenu)
 
 from diffly.core.documents.syntax import language_for
@@ -14,6 +14,7 @@ from diffly.core.merge.three_way import MergeResult
 from diffly.gui.diff_gutter import draw_ribbon
 from diffly.gui.editor_widget import EditorWidget
 from diffly.gui.icons import toolbar_icon
+from diffly.gui.seamless_splitter import SeamlessSplitter
 from diffly.services.file_service import file_stamp, read_merge_file, write_file
 
 
@@ -39,20 +40,6 @@ class _RegionState:
     start: int
     end: int
     applied: bool = False
-
-
-class _SeamlessSplitterHandle(QSplitterHandle):
-    def __init__(self, orientation, parent):
-        super().__init__(orientation, parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-
-    def paintEvent(self, _event):
-        pass
-
-
-class _SeamlessSplitter(QSplitter):
-    def createHandle(self):
-        return _SeamlessSplitterHandle(self.orientation(), self)
 
 
 class _ConflictOverview(QWidget):
@@ -372,7 +359,7 @@ class MergeView(QWidget):
         self.overview = _ConflictOverview(self)
         right_row.addWidget(self.overview)
         right_layout.addLayout(right_row, 1)
-        top = _SeamlessSplitter(Qt.Orientation.Horizontal, self)
+        top = SeamlessSplitter(Qt.Orientation.Horizontal, self)
         top.setHandleWidth(0)
         left_panel.setMinimumWidth(150)
         center_panel.setMinimumWidth(220)
