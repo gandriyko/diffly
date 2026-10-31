@@ -9,6 +9,17 @@ from diffly.gui.icons import toolbar_icon
 BUTTON = 16
 
 
+def ribbon_path(width: float, left_top: float, left_bottom: float,
+                right_top: float, right_bottom: float) -> QPainterPath:
+    middle = width / 2
+    path = QPainterPath(QPointF(0, left_top))
+    path.cubicTo(middle, left_top, middle, right_top, width, right_top)
+    path.lineTo(width, right_bottom)
+    path.cubicTo(middle, right_bottom, middle, left_bottom, 0, left_bottom)
+    path.closeSubpath()
+    return path
+
+
 class DiffGutter(QWidget):
     # row, source_is_left, append
     transfer_requested = Signal(int, bool, bool)
@@ -25,9 +36,14 @@ class DiffGutter(QWidget):
         self._hover: tuple[int, bool] | None = None
         self.setFixedWidth(2 * BUTTON + 24)
         self.setMouseTracking(True)
-        left_editor.verticalScrollBar().valueChanged.connect(self.update)
         for editor in (left_editor, right_editor):
+            editor.verticalScrollBar().valueChanged.connect(self.update)
             editor.blockCountChanged.connect(self.update)
+            editor.updateRequest.connect(self._content_updated)
+
+    def _content_updated(self, _rect, dy: int):
+        if dy:
+            self.update()
 
     def sizeHint(self):
         return QSize(self.width(), 0)
@@ -49,30 +65,47 @@ class DiffGutter(QWidget):
         self.append = append
         self.update()
 
-    def _band(self, hunk) -> tuple[float, float] | None:
-        # Panes are aligned, so the longer side's real lines span the whole difference.
-        left_count, right_count = hunk.left_end - hunk.left_start, hunk.right_end - hunk.right_start
-        editor, start, count = (
-            (self.left_editor, hunk.left_start, left_count) if left_count >= right_count
-            else (self.right_editor, hunk.right_start, right_count)
-        )
-        top = editor.line_top(start)
+    def _edge(self, editor, start: int, end: int) -> tuple[float, float] | None:
+        count = editor.document().blockCount()
+        if start < count:
+            top = editor.line_top(start)
+            if start == end:
+                top -= sum(gap for line, gap in editor.placeholder_ranges if line == start) * editor.line_height()
+        else:
+            last = editor.line_top(count - 1)
+            top = last + editor.line_height() if last is not None else None
         if top is None:
             return None
+        bottom = (editor.line_top(min(end - 1, count - 1)) + editor.line_height()
+                  if end > start else top)
         offset = self.mapFromGlobal(editor.viewport().mapToGlobal(QPointF(0, 0))).y()
-        return offset + top, offset + top + count * editor.line_height()
+        return offset + top, offset + bottom
+
+    def _edges(self, hunk) -> tuple[float, float, float, float] | None:
+        left = self._edge(self.left_editor, hunk.left_start, hunk.left_end)
+        right = self._edge(self.right_editor, hunk.right_start, hunk.right_end)
+        if left is None or right is None:
+            return None
+        return *left, *right
+
+    def _band(self, hunk) -> tuple[float, float] | None:
+        edges = self._edges(hunk)
+        if edges is None:
+            return None
+        left_top, left_bottom, right_top, right_bottom = edges
+        return min(left_top, right_top), max(left_bottom, right_bottom)
 
     def _visible(self):
-        """Yield (row, hunk, top, bottom) for differences on screen."""
+        """Yield visible differences with the actual edges of both panes."""
         for row, hunk in enumerate(self.hunks):
-            band = self._band(hunk)
-            if band is None:
+            edges = self._edges(hunk)
+            if edges is None:
                 continue
-            top, bottom = band
-            if top > self.height():
+            left_top, left_bottom, right_top, right_bottom = edges
+            if min(left_top, right_top) > self.height():
                 break
-            if bottom >= 0:
-                yield row, hunk, top, bottom
+            if max(left_bottom, right_bottom) >= 0:
+                yield row, hunk, *edges
 
     def button_rect(self, top: float, source_is_left: bool) -> QRectF:
         x = 3 if source_is_left else self.width() - BUTTON - 3
@@ -86,18 +119,9 @@ class DiffGutter(QWidget):
         painter.fillRect(event.rect(), QColor(c["surface"]))
         prefix = "append" if self.append else "apply"
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        width, middle = self.width(), self.width() / 2
-        line_height = self.left_editor.line_height()
-        for row, hunk, top, _bottom in self._visible():
-            # Meld-style ribbon: each side's real lines start at the shared top,
-            # the shorter side ends early and the bottom edge curves between them.
-            left_bottom = top + (hunk.left_end - hunk.left_start) * line_height
-            right_bottom = top + (hunk.right_end - hunk.right_start) * line_height
-            path = QPainterPath(QPointF(0, top))
-            path.lineTo(width, top)
-            path.lineTo(width, right_bottom)
-            path.cubicTo(middle, right_bottom, middle, left_bottom, 0, left_bottom)
-            path.closeSubpath()
+        width = self.width()
+        for row, hunk, left_top, left_bottom, right_top, right_bottom in self._visible():
+            path = ribbon_path(width, left_top, left_bottom, right_top, right_bottom)
             color = QColor(c[{"insert": "overview_added", "delete": "overview_removed"}.get(hunk.tag, "overview_replace")])
             edge = QColor(color)
             edge.setAlpha(170)
@@ -106,7 +130,7 @@ class DiffGutter(QWidget):
             painter.setBrush(color)
             painter.drawPath(path)
             for source_is_left, kind in ((True, "right"), (False, "left")):
-                rect = self.button_rect(top, source_is_left)
+                rect = self.button_rect(left_top if source_is_left else right_top, source_is_left)
                 if self._hover == (row, source_is_left):
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.setBrush(QColor(c["border"]))
@@ -114,8 +138,8 @@ class DiffGutter(QWidget):
                 self._icons[f"{prefix}_{kind}"].paint(painter, rect.toRect())
 
     def _button_at(self, point: QPointF) -> tuple[int, bool] | None:
-        for row, _hunk, top, _bottom in self._visible():
-            for source_is_left in (True, False):
+        for row, _hunk, left_top, _left_bottom, right_top, _right_bottom in self._visible():
+            for source_is_left, top in ((True, left_top), (False, right_top)):
                 if self.button_rect(top, source_is_left).contains(point):
                     return row, source_is_left
         return None

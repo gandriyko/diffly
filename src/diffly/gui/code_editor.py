@@ -62,9 +62,11 @@ class CodeEditor(QPlainTextEdit):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.theme: dict = {}
         self.syntax_language: str | None = None
+        self.line_numbers_visible = True
         self.indent_width = 4
         self.tab_width = 4
         self.placeholder_ranges: tuple[tuple[int, int], ...] = ()
+        self.merge_conflict_ranges: tuple[tuple[int, int, bool], ...] = ()
         self._gap_starts: tuple[int, ...] = ()
         self._visual_gap_starts: tuple[int, ...] = ()
         self._gap_totals: tuple[int, ...] = ()
@@ -78,8 +80,17 @@ class CodeEditor(QPlainTextEdit):
         self._update_side_width()
 
     def side_width(self) -> int:
+        if not self.line_numbers_visible:
+            return 0
         digits = max(2, len(str(self.blockCount())))
         return 8 + self.fontMetrics().horizontalAdvance("9") * digits + 7
+
+    def set_line_numbers_visible(self, visible: bool):
+        if self.line_numbers_visible == visible:
+            return
+        self.line_numbers_visible = visible
+        self.side_area.setVisible(visible)
+        self._update_side_width()
 
     def _update_side_width(self, *_):
         self.setViewportMargins(self.side_width(), 0, 0, 0)
@@ -134,6 +145,10 @@ class CodeEditor(QPlainTextEdit):
         self.viewport().update()
         self.side_area.update()
 
+    def set_merge_conflict_ranges(self, ranges: tuple[tuple[int, int, bool], ...]):
+        self.merge_conflict_ranges = ranges
+        self.viewport().update()
+
     def visual_row(self, block_number: int) -> int:
         """Position of a real block in the aligned pair of documents."""
         index = bisect_right(self._gap_starts, block_number) - 1
@@ -166,6 +181,26 @@ class CodeEditor(QPlainTextEdit):
         if self.syntax_language is not None:
             self._paint_indent_guides(event)
         self._paint_placeholders(event)
+        self._paint_merge_conflict_borders(event)
+
+    def _paint_merge_conflict_borders(self, event):
+        if not self.merge_conflict_ranges:
+            return
+        painter = QPainter(self.viewport())
+        painter.setClipRect(event.rect())
+        width = self.viewport().width()
+        for start, end, unresolved in self.merge_conflict_ranges:
+            if start >= end:
+                continue
+            top = self.line_top(start)
+            last = self.line_top(end - 1)
+            if top is None or last is None:
+                continue
+            color = QColor(self.theme["overview_removed" if unresolved else "overview_added"])
+            painter.setPen(QPen(color, 1))
+            painter.drawLine(0, round(top), width, round(top))
+            bottom = round(last + self.line_height())
+            painter.drawLine(0, bottom, width, bottom)
 
     def _paint_placeholders(self, event):
         if not self.placeholder_ranges:

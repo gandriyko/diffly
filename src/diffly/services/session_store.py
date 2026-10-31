@@ -30,9 +30,15 @@ def load_sessions() -> dict:
 
 
 def _valid(entry: object) -> bool:
-    return (isinstance(entry, dict) and entry.get("kind") in ("files", "directories")
-            and isinstance(entry.get("left"), str) and isinstance(entry.get("right"), str)
-            and bool(entry["left"]) and bool(entry["right"]))
+    if not isinstance(entry, dict):
+        return False
+    kind = entry.get("kind")
+    if kind not in ("files", "directories", "merge"):
+        return False
+    fields = ("base", "left", "right") if kind == "merge" else ("left", "right")
+    return (all(isinstance(entry.get(key), str) and bool(entry[key]) for key in fields)
+            and (kind != "merge" or entry.get("result") is None or
+                 isinstance(entry["result"], str)))
 
 
 def save_sessions(data: dict) -> None:
@@ -54,6 +60,6 @@ def save_sessions(data: dict) -> None:
 
 
 def remember(data: dict, entry: dict) -> None:
-    pair = (entry["kind"], entry["left"], entry["right"])
+    pair = (entry["kind"], entry.get("base"), entry["left"], entry["right"])
     data["recent"] = [entry] + [item for item in data["recent"]
-                                if (item["kind"], item["left"], item["right"]) != pair][:9]
+                                if (item["kind"], item.get("base"), item["left"], item["right"]) != pair][:9]

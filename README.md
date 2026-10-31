@@ -8,7 +8,7 @@ Comparing the [JSON example files](tests/fixtures/diff/README.md).
 
 Comparing the [example directories](tests/fixtures/directories/README.md).
 
-Diffly is a two-pane text comparison and merge editor for macOS and Linux. This repository implements the Phase 1 MVP in [SPEC.md](SPEC.md).
+Diffly is a text comparison and file merge editor for macOS and Linux. The two-pane comparison is described in [SPEC.md](SPEC.md).
 
 ## Run
 
@@ -50,11 +50,30 @@ Open one or two files directly from the command line:
 
 Relative paths are resolved from the current working directory. The first file opens in the left pane and the optional second file opens in the right pane. Run `diffly --help` for usage.
 
+To merge three versions of one text file, run:
+
+```sh
+.venv/bin/diffly --merge base.txt left.txt right.txt
+.venv/bin/diffly --merge base.txt left.txt right.txt --output result.txt
+```
+
+To use Diffly as a Git mergetool, install the `diffly` command on your `PATH` and configure Git:
+
+```sh
+git config --global merge.tool diffly
+git config --global mergetool.diffly.cmd 'diffly --merge "$BASE" "$LOCAL" "$REMOTE" --output "$MERGED"'
+git config --global mergetool.diffly.trustExitCode true
+```
+
+After a conflicting `git merge`, run `git mergetool --tool=diffly`. Git passes the common BASE (which may be empty), the current branch as LOCAL, the incoming branch as REMOTE, and the working-tree file as MERGED. Diffly waits for the window to close. When the existing MERGED text differs from the generated merge, choose whether to open that existing text or start a fresh merge; the existing file is not changed until Save. **File → Recreate Merge Result** switches from the existing text to Diffly's three-way result. Git receives success only after the result is saved to MERGED, all conflicts are marked resolved, and the file remains unchanged through closing. Closing without completing these steps reports failure to Git. A direct `diffly` process is required so Git can wait for its exit; launching the app with a detached `open -a` command will not provide that status.
+
+The **Merge** tab appears only for `--merge`. It places read-only Left and Right beside an editable Result in the center. Separate changes merge automatically; competing changes initially show Left's text in Result with a highlighted unresolved region. Base remains available through **Edit → Use Base**. Result does not insert conflict marker lines. An arrow beside a changed block copies that side's text into Result; both gutter arrows for that block disappear after application and return on Undo. The gutters use the same curved, theme-colored connection bands as the Files tab. The icon toolbar navigates conflicts and chooses Left or Right for the selected conflict. **F7** and **Shift+F7** navigate conflicts; **Ctrl+Alt+1/2/3** select Left, Right, or Base. Result starts in memory. **File → Save Result** offers a sibling of Left named `<stem>.merged<suffix>` by default; `--output` selects a path without writing it on launch. Saving with unresolved conflicts asks for confirmation. Result inherits Left's encoding, BOM, and newline style; its encoding menu is in the status bar. **File → Recreate Result** and **File → Reload Merge Sources** ask before discarding edits. Merge sessions store paths only, so reopening recomputes the merge when started with `--merge`.
+
 Open a file into each pane with **File → Open Left/Right**. Edit either pane independently. Colored rows show differences, and stronger color marks changed text within replaced lines. Click a changed row or navigate with the toolbar to select a diff block, then apply it with the toolbar or delete it from the Edit menu. Each action is one Undo operation in its destination editor. **Cmd+S** on macOS (**Ctrl+S** on Linux) saves the active editor; **File → Save As…** also applies to that editor. A failed save leaves the original file untouched.
 
 Use **Edit → Find…** (**Cmd/Ctrl+F**) or **Edit → Replace…** (**Cmd/Ctrl+H**) to open a compact panel above the footer. It searches only the current editor and follows the active pane if you switch editors. Use the arrow buttons, **F3** for the next match, or **Shift+F3** for the previous one. The panel also supports optional case matching, replacing one match, and replacing all matches in the current editor. Replace All is one Undo step. Search and replacement use literal text; close the panel with **Esc** or ×.
 
-Open the **Settings** tab directly or through **Settings → Open Settings** (**Cmd/Ctrl+,**). The page groups appearance, editor, file comparison, and directory filtering preferences. Changes apply immediately and are saved to the user TOML configuration. File comparison can ignore trailing spaces and tabs, all spaces and tabs, or letter case when determining differences. These rules change which differences are shown; applying a block still copies its original text. A saved file comparison remembers its rules.
+Open the **Settings** tab directly or through **Settings → Open Settings** (**Cmd/Ctrl+,**). The page groups appearance, editor, file comparison, and directory filtering preferences. Changes apply immediately and are saved to the user TOML configuration. The line number and syntax highlighting switches apply to both Files and Merge; line numbers are off by default. File comparison can ignore trailing spaces and tabs, all spaces and tabs, or letter case when determining differences. These rules change which differences are shown; applying a block still copies its original text. A saved file comparison remembers its rules.
 
 Use **File → Save Comparison…** to name the current pair of files or directories. Reopen it from **Saved Comparisons**; **Recent Comparisons** keeps the last ten successful pairs and can be cleared. Saved comparisons can be removed from the menu. Diffly stores paths and comparison options, not file contents, in `sessions.json` beside the user configuration file. Reopening checks that both paths still exist and asks before discarding unsaved editor changes.
 
@@ -66,7 +85,7 @@ In **Settings → Directory filtering**, add, edit, or remove custom masks. A ma
 
 By default, directory comparisons also read `.gitignore` files in each selected directory, nested directories, and parent directories up to the Git working-tree root. Outside a Git working tree, Diffly reads accessible parent `.gitignore` files. More specific files can override parent rules, including with `!` negation; an ignored folder remains pruned. Uncheck **Use .gitignore from selected and parent folders** on the settings page to compare those paths too. The choice, enabled preset groups, and custom masks are saved in the user TOML configuration as `use_gitignore`, `ignore_presets`, and `ignore_patterns`. Custom masks and enabled presets always exclude matching paths, including paths that a `.gitignore` rule would re-include.
 
-In the **Files** tab, Refresh reloads opened files from disk and compares them again; it asks before discarding unsaved edits. The toolbar also navigates between differences, applies the selected block in either direction, and pastes clipboard text into the active editor at its cursor. Hovering a toolbar button shows a border without changing the icon color. The large left and right arrows show the destination of each apply action. Both editors show line numbers; recognized source and markup files also show faint dotted indent guides every four spaces by default to trace nesting levels. Missing lines are shown as diagonally hatched spaces, aligning the following text without changing either file. A slightly wider colored diff overview at the far right replaces the visible vertical scrollbar. Click or drag its viewport marker to scroll both panes; the mouse wheel over either editor also scrolls them together. One horizontal scrollbar below both panes controls their horizontal offsets; horizontal trackpad gestures and Shift+wheel scroll both panes too. A shorter pane stops at its own right edge.
+In the **Files** tab, Refresh reloads opened files from disk and compares them again; it asks before discarding unsaved edits. The toolbar also navigates between differences, applies the selected block in either direction, and pastes clipboard text into the active editor at its cursor. Hovering a toolbar button shows a border without changing the icon color. The large left and right arrows show the destination of each apply action. Recognized source and markup files show faint dotted indent guides every four spaces by default to trace nesting levels. Missing lines are shown as diagonally hatched spaces, aligning the following text without changing either file. A slightly wider colored diff overview at the far right replaces the visible vertical scrollbar. Click or drag its viewport marker to scroll both panes; the mouse wheel over either editor also scrolls them together. One horizontal scrollbar below both panes controls their horizontal offsets; horizontal trackpad gestures and Shift+wheel scroll both panes too. A shorter pane stops at its own right edge.
 
 On macOS, Diffly sets the native toolbar to the compact inline titlebar style. The editors use the full width of the window. The status bar shows deleted, added, changed, and identical line counts. The **Encoding** button shows the active pane's encoding. Its menu lists **Auto** and the available encodings. Choosing one reopens an existing file with that encoding; for an untitled pane it sets the encoding used when saving. Change tab stops and indent guides on the **Settings** page; the choice is saved in the user TOML config. A double-click on an empty part of the Qt toolbar toggles a maximized window without entering fullscreen. A double-click on the empty title area also toggles a maximized window without entering fullscreen.
 

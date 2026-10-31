@@ -1,6 +1,13 @@
 import pytest
 
-from diffly.services.file_service import read_file, write_file
+from diffly.services.file_service import read_file, read_merge_file, write_file
+
+
+def test_merge_rejects_decoded_binary_content(tmp_path):
+    path = tmp_path / "binary.bin"
+    path.write_bytes(b"a\x00b\x01")
+    with pytest.raises(ValueError, match="Binary input"):
+        read_merge_file(path, "utf-8")
 
 
 def test_save_preserves_bom_line_endings_and_rejects_external_change(tmp_path):

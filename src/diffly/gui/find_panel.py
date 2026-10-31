@@ -85,11 +85,17 @@ class FindPanel(QWidget):
         if self.target is pane:
             return
         self.target = pane
-        self.target_label.setText("Left" if pane is self.window.left else "Right")
+        if pane is self.window.left:
+            label = "Left"
+        elif pane is self.window.right:
+            label = "Right"
+        else:
+            label = "Result"
+        self.target_label.setText(label)
         self._message("")
 
-    def show_search(self, replace: bool = False):
-        self.set_target(self.window._active_pane())
+    def show_search(self, replace: bool = False, target=None):
+        self.set_target(target or self.window._active_pane())
         self.replace_row.setVisible(replace)
         self._message("")
         selected = self.target.editor.textCursor().selectedText()

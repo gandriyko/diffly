@@ -4,6 +4,7 @@ from concurrent.futures import ProcessPoolExecutor
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from diffly.core.diff.engine import CompareOptions, compare
+from diffly.core.merge.three_way import merge
 from diffly.core.documents.syntax import tokenize_document
 
 
@@ -33,6 +34,8 @@ class TaskScheduler(QObject):
     diff_ready = Signal(object)
     diff_failed = Signal(str)
     syntax_ready = Signal(object)
+    merge_ready = Signal(object)
+    merge_failed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,6 +44,7 @@ class TaskScheduler(QObject):
         self.process_pool = ProcessPoolExecutor(max_workers=1)
         self.syntax_pool = ProcessPoolExecutor(max_workers=1)
         self._diff_future = None
+        self._merge_future = None
         self._syntax_futures = {}
         self._pending_file_signals: dict[object, TaskSignals] = {}
 
@@ -94,9 +98,29 @@ class TaskScheduler(QObject):
 
         future.add_done_callback(finished)
 
+    def submit_merge(self, base: str, left: str, right: str,
+                     revisions: tuple[int, int, int]):
+        if self._merge_future is not None:
+            self._merge_future.cancel()
+        future = self.process_pool.submit(merge, base, left, right, revisions)
+        self._merge_future = future
+
+        def finished(done):
+            try:
+                result = done.result()
+            except Exception as exc:
+                if not done.cancelled():
+                    self.merge_failed.emit(str(exc))
+            else:
+                self.merge_ready.emit(result)
+
+        future.add_done_callback(finished)
+
     def shutdown(self):
         if self._diff_future is not None:
             self._diff_future.cancel()
+        if self._merge_future is not None:
+            self._merge_future.cancel()
         self.process_pool.shutdown(wait=False, cancel_futures=True)
         for future in self._syntax_futures.values():
             future.cancel()

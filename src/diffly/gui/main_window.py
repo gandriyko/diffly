@@ -33,9 +33,10 @@ from diffly.gui.find_panel import FindPanel
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.settings_page import SettingsPage
 from diffly.gui.linux_titlebar import LinuxTitleBar
+from diffly.gui.merge_view import MergeView
 from diffly.gui.theme import (
     apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
-    save_font_size, save_indent_width, save_selected_theme,
+    save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
 from diffly.services.file_service import file_stamp, read_file, write_file
@@ -97,8 +98,12 @@ class _ShiftWatcher(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, merge_enabled: bool = False, git_mergetool: bool = False):
         super().__init__()
+        self.merge_enabled = merge_enabled
+        self.git_mergetool = git_mergetool
+        self.git_merge_success = False
+        self.git_merge_aborted = False
         if os.environ.get("DIFFLY_NO_DIALOGS"):
             _suppress_dialogs()
         self.setWindowTitle("Diffly")
@@ -112,6 +117,8 @@ class MainWindow(QMainWindow):
         self.scheduler.diff_ready.connect(self._accept_diff)
         self.scheduler.diff_failed.connect(self._diff_error)
         self.scheduler.syntax_ready.connect(self._accept_syntax)
+        self.scheduler.merge_ready.connect(self._accept_merge)
+        self.scheduler.merge_failed.connect(self._merge_error)
         self.config = load_config()
         try:
             self.sessions = load_sessions()
@@ -127,6 +134,10 @@ class MainWindow(QMainWindow):
         self.toolbar = None
         self.left = EditorWidget()
         self.right = EditorWidget()
+        self.syntax_highlighting_enabled = bool(self.config.settings.get("syntax_highlighting", True))
+        for editor in (self.left, self.right):
+            editor.editor.set_line_numbers_visible(bool(
+                self.config.settings.get("show_line_numbers", False)))
         self.left.editor.installEventFilter(self)
         self.right.editor.installEventFilter(self)
         self.left.editor.viewport().installEventFilter(self)
@@ -146,6 +157,7 @@ class MainWindow(QMainWindow):
         self._serial = 0
         self._native_toolbar_attempts = 0
         self._native_toolbar_bridge = None
+        self._merge_native_toolbar_bridge = None
         self._append_mode = False
         QApplication.instance().installEventFilter(_ShiftWatcher(self._set_append_mode, self))
 
@@ -194,11 +206,28 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("ComparisonTabs")
         self.tabs.addTab(self.directory_comparison, "Directories")
         self.tabs.addTab(root, "Files")
+        self.merge_view = MergeView(
+            self.scheduler, self,
+            line_numbers_visible=bool(self.config.settings.get("show_line_numbers", False)),
+            syntax_highlighting_enabled=self.syntax_highlighting_enabled,
+            git_mergetool=git_mergetool,
+        )
+        self.merge_find_panel = FindPanel(self, self.merge_view)
+        self.merge_find_panel.set_target(self.merge_view.result)
+        self.merge_view.layout().insertWidget(1, self.merge_find_panel)
+        if merge_enabled:
+            self.tabs.addTab(self.merge_view, "Merge")
+        else:
+            self.merge_view.hide()
+        self.merge_view.paths_changed.connect(self._remember_merge)
+        self.merge_view.status_changed.connect(self.statusBar().showMessage)
+        self.statusBar().addPermanentWidget(self.merge_view.encoding_button)
         self.settings_page = SettingsPage(self.config.settings, self.config.themes, self)
         self.tabs.addTab(self.settings_page, "Settings")
         self.settings_page.theme_changed.connect(self._choose_theme)
         self.settings_page.font_size_changed.connect(self._set_font_size)
         self.settings_page.indent_width_changed.connect(self._set_indent_width)
+        self.settings_page.editor_display_changed.connect(self._set_editor_display_options)
         self.settings_page.comparison_changed.connect(self._set_comparison_options)
         self.settings_page.filters_changed.connect(self._set_directory_filters)
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -220,6 +249,8 @@ class MainWindow(QMainWindow):
         self._update_horizontal_scroll_range()
         self._make_menu()
         self._make_toolbar()
+        self._make_merge_toolbar()
+        self.merge_view.state_changed.connect(self._refresh_merge_toolbar)
         self._recent_timer = QTimer(self)
         self._recent_timer.setSingleShot(True)
         self._recent_timer.setInterval(700)
@@ -278,6 +309,9 @@ class MainWindow(QMainWindow):
         self.saved_menu = file_menu.addMenu("Saved Comparisons")
         self.recent_menu = file_menu.addMenu("Recent Comparisons")
         self._refresh_session_menus()
+        file_menu.addSeparator()
+        self.merge_recreate_action = file_menu.addAction("Recreate Merge Result", self.merge_view.recreate)
+        self.merge_reload_action = file_menu.addAction("Reload Merge Sources", self.merge_view.reload_sources)
         edit_menu = menu_bar.addMenu("Edit")
         for label, shortcut, operation in (
             ("Undo", "Ctrl+Z", "undo"),
@@ -287,6 +321,21 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, op=operation: getattr(self.focused_editor(), op)())
             edit_menu.addAction(action)
+        edit_menu.addSeparator()
+        self.merge_actions = []
+        for label, shortcut, callback in (
+            ("Previous conflict", "Shift+F7", lambda: self.merge_view.navigate(-1)),
+            ("Next conflict", "F7", lambda: self.merge_view.navigate(1)),
+            ("Use Left", "Ctrl+Alt+1", lambda: self.merge_view.use("left")),
+            ("Use Right", "Ctrl+Alt+2", lambda: self.merge_view.use("right")),
+            ("Use Base", "Ctrl+Alt+3", lambda: self.merge_view.use("base")),
+            ("Mark Resolved", "Ctrl+Alt+0", self.merge_view.mark_resolved),
+        ):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(callback)
+            edit_menu.addAction(action)
+            self.merge_actions.append(action)
         edit_menu.addSeparator()
         self.find_actions = []
         for label, shortcut, callback in (
@@ -321,23 +370,32 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(lambda: self.tabs.setCurrentWidget(self.settings_page))
 
     def _show_find(self, replace: bool):
-        if self.tabs.currentWidget() is not self.file_comparison:
+        panel, target = self._active_find_target()
+        if panel is None:
             return
-        self.find_panel.show_search(replace)
+        panel.show_search(replace, target)
 
     def _repeat_find(self, backwards: bool):
-        if self.tabs.currentWidget() is not self.file_comparison:
+        panel, target = self._active_find_target()
+        if panel is None:
             return
-        if not self.find_panel.query.text():
+        if not panel.query.text():
             self._show_find(False)
             return
-        self.find_panel.set_target(self._active_pane())
+        panel.set_target(target)
         if backwards:
-            found = self.find_panel.find_previous()
+            found = panel.find_previous()
         else:
-            found = self.find_panel.find_next()
+            found = panel.find_next()
         if not found:
             self.statusBar().showMessage("No matches in current editor")
+
+    def _active_find_target(self):
+        if self.tabs.currentWidget() is self.file_comparison:
+            return self.find_panel, self._active_pane()
+        if self.tabs.currentWidget() is self.merge_view:
+            return self.merge_find_panel, self.merge_view.result
+        return None, None
 
     def _set_comparison_options(self, options: CompareOptions):
         self.compare_options = options
@@ -351,6 +409,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Comparison settings applied but not saved: {exc}")
 
     def _comparison_entry(self):
+        if self.tabs.currentWidget() is self.merge_view:
+            if self.git_mergetool:
+                return None
+            if self.merge_view.paths is None:
+                return None
+            base, left, right = self.merge_view.paths
+            entry = {"kind": "merge", "base": str(base), "left": str(left), "right": str(right)}
+            if self.merge_view.result.state.path is not None:
+                entry["result"] = str(self.merge_view.result.state.path)
+            return entry
         if self.tabs.currentWidget() is self.directory_comparison:
             left = self.directory_comparison.left_path.text().strip()
             right = self.directory_comparison.right_path.text().strip()
@@ -380,25 +448,29 @@ class MainWindow(QMainWindow):
     def _refresh_session_menus(self):
         for menu, key in ((self.saved_menu, "saved"), (self.recent_menu, "recent")):
             menu.clear()
-            for entry in self.sessions[key]:
-                label = entry.get("name") or f'{Path(entry["left"]).name} ↔ {Path(entry["right"]).name}'
+            visible_entries = [entry for entry in self.sessions[key]
+                               if self.merge_enabled or entry["kind"] != "merge"]
+            for entry in visible_entries:
+                label = entry.get("name") or (f'{Path(entry["base"]).name}: {Path(entry["left"]).name} + {Path(entry["right"]).name}'
+                                              if entry["kind"] == "merge" else
+                                              f'{Path(entry["left"]).name} ↔ {Path(entry["right"]).name}')
                 action = menu.addAction(label)
-                action.setToolTip(f'{entry["left"]} ↔ {entry["right"]}')
+                action.setToolTip(f'{entry.get("base", "")} {entry["left"]} ↔ {entry["right"]}')
                 action.triggered.connect(lambda checked=False, item=entry.copy(): self._open_comparison(item))
-            if not self.sessions[key]:
+            if not visible_entries:
                 empty = menu.addAction("No comparisons")
                 empty.setEnabled(False)
-        if self.sessions["saved"]:
+        if any(self.merge_enabled or entry["kind"] != "merge" for entry in self.sessions["saved"]):
             self.saved_menu.addSeparator()
             self.saved_menu.addAction("Remove Saved Comparison…", self._remove_saved_comparison)
-        if self.sessions["recent"]:
+        if any(self.merge_enabled or entry["kind"] != "merge" for entry in self.sessions["recent"]):
             self.recent_menu.addSeparator()
             self.recent_menu.addAction("Clear Recent Comparisons", self._clear_recent)
 
     def _save_comparison(self):
         entry = self._comparison_entry()
         if entry is None:
-            QMessageBox.information(self, "Save Comparison", "Choose two files or directories first.")
+            QMessageBox.information(self, "Save Comparison", "Open files, directories, or a merge first.")
             return
         name, accepted = QInputDialog.getText(self, "Save Comparison", "Name")
         name = name.strip()
@@ -410,7 +482,8 @@ class MainWindow(QMainWindow):
         self._persist_sessions()
 
     def _remove_saved_comparison(self):
-        names = [entry["name"] for entry in self.sessions["saved"]]
+        names = [entry["name"] for entry in self.sessions["saved"]
+                 if self.merge_enabled or entry["kind"] != "merge"]
         name, accepted = QInputDialog.getItem(self, "Remove Saved Comparison", "Comparison", names, 0, False)
         if accepted:
             self.sessions["saved"] = [entry for entry in self.sessions["saved"] if entry["name"] != name]
@@ -436,14 +509,26 @@ class MainWindow(QMainWindow):
         remember(self.sessions, entry)
         self._persist_sessions()
 
+    def _remember_merge(self):
+        entry = self._comparison_entry() if self.tabs.currentWidget() is self.merge_view else None
+        if entry is not None:
+            remember(self.sessions, entry)
+            self._persist_sessions()
+
     def _open_comparison(self, entry: dict):
         if self._busy_files or self._directory_copy_busy:
             return
-        paths = (Path(entry["left"]), Path(entry["right"]))
+        paths = ((Path(entry["base"]), Path(entry["left"]), Path(entry["right"]))
+                 if entry["kind"] == "merge" else (Path(entry["left"]), Path(entry["right"])))
         if not all(path.exists() for path in paths):
             QMessageBox.warning(self, "Open Comparison", "One or both paths no longer exist.")
             return
-        if entry["kind"] == "files":
+        if entry["kind"] == "merge":
+            if not self.merge_enabled:
+                return
+            self.tabs.setCurrentWidget(self.merge_view)
+            self.merge_view.open_paths(*paths, Path(entry["result"]) if entry.get("result") else None)
+        elif entry["kind"] == "files":
             if not all(self._confirm_discard(editor) for editor in (self.left, self.right)):
                 return
             self.tabs.setCurrentWidget(self.file_comparison)
@@ -508,8 +593,58 @@ class MainWindow(QMainWindow):
         self.toolbar = toolbar
         toolbar.installEventFilter(self)
 
+    def _make_merge_toolbar(self):
+        toolbar = QToolBar("Merge controls", self._linux_titlebar or self)
+        toolbar.setObjectName("DifflyToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        if self._linux_titlebar is None:
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        else:
+            self._linux_titlebar.add_toolbar(toolbar)
+        self._merge_toolbar_icons = {}
+
+        def add(label, kind, callback, tip):
+            action = QAction(label, self)
+            action.setToolTip(tip)
+            action.triggered.connect(callback)
+            toolbar.addAction(action)
+            self._merge_toolbar_icons[action] = kind
+            return action
+
+        self.merge_previous_action = add("Previous conflict", "up", lambda: self.merge_view.navigate(-1),
+                                         "Previous conflict (Shift+F7)")
+        self.merge_next_action = add("Next conflict", "down", lambda: self.merge_view.navigate(1),
+                                     "Next conflict (F7)")
+        toolbar.addSeparator()
+        self.merge_use_left_action = add("Use Left", "apply_right", lambda: self.merge_view.use("left"),
+                                         "Use Left for selected conflict (Ctrl+Alt+1)")
+        self.merge_use_right_action = add("Use Right", "apply_left", lambda: self.merge_view.use("right"),
+                                          "Use Right for selected conflict (Ctrl+Alt+2)")
+        self.merge_toolbar = toolbar
+        toolbar.hide()
+        self._refresh_merge_toolbar()
+
+    def _refresh_merge_toolbar(self):
+        if not hasattr(self, "merge_toolbar"):
+            return
+        view = self.merge_view
+        for action, key in ((self.merge_previous_action, "Previous conflict"),
+                            (self.merge_next_action, "Next conflict")):
+            action.setEnabled(view.buttons[key].isEnabled())
+        selected = view._selected >= 0 and not view.busy
+        self.merge_use_left_action.setEnabled(selected)
+        self.merge_use_right_action.setEnabled(selected)
+        active = self.tabs.currentWidget() is view
+        self.merge_recreate_action.setEnabled(active and view.buttons["Recreate Result"].isEnabled())
+        self.merge_reload_action.setEnabled(active and view.buttons["Reload Sources"].isEnabled())
+        if getattr(self, "_merge_native_toolbar_bridge", None) is not None:
+            self._merge_native_toolbar_bridge.sync()
+
     def _refresh_toolbar(self):
-        if self.tabs.currentWidget() is self.settings_page:
+        if self.tabs.currentWidget() in (self.settings_page, self.merge_view):
             for action in (self.refresh_action, self.previous_action, self.next_action,
                            self.apply_left_action, self.apply_right_action, self.paste_action,
                            self.delete_left_action, self.delete_right_action):
@@ -595,12 +730,15 @@ class MainWindow(QMainWindow):
         self._refresh_directory_stats()
         for action, kind in self._toolbar_icons.items():
             action.setIcon(toolbar_icon(kind, theme["text"]))
+        for action, kind in self._merge_toolbar_icons.items():
+            action.setIcon(toolbar_icon(kind, theme["text"]))
         font = editor_font(self.config.settings)
         tab_width = max(1, int(self.config.settings.get("tab_width", 4)))
         indent_guide_width = max(1, int(self.config.settings.get("indent_guide_width", 4)))
         for editor in (self.left, self.right):
             editor.set_font(font, tab_width, indent_guide_width)
             editor.set_theme(theme)
+        self.merge_view.set_appearance(theme, font, tab_width, indent_guide_width)
         self.overview.set_theme(theme)
         self.gutter.set_theme(theme)
         self.directory_comparison.set_theme(theme)
@@ -617,6 +755,29 @@ class MainWindow(QMainWindow):
             save_selected_theme(name)
         except OSError as exc:
             self.statusBar().showMessage(f"Theme applied but not saved: {exc}")
+
+    def _set_editor_display_options(self, line_numbers: bool, syntax_highlighting: bool):
+        self.merge_view.set_line_numbers_visible(line_numbers)
+        self.merge_view.set_syntax_highlighting_enabled(syntax_highlighting)
+        for editor in (self.left, self.right):
+            editor.editor.set_line_numbers_visible(line_numbers)
+        self.syntax_highlighting_enabled = syntax_highlighting
+        if syntax_highlighting:
+            for side, editor in (("left", self.left), ("right", self.right)):
+                self._request_syntax(side, editor)
+        else:
+            for timer in self._syntax_timers.values():
+                timer.stop()
+            for editor in (self.left, self.right):
+                editor.highlighter.set_spans(())
+        self._update_horizontal_scroll_range()
+        self.gutter.update()
+        self.config.settings["show_line_numbers"] = line_numbers
+        self.config.settings["syntax_highlighting"] = syntax_highlighting
+        try:
+            save_editor_display_options(line_numbers, syntax_highlighting)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Editor display options applied but not saved: {exc}")
 
     def _set_font_size(self, size: int):
         self.config.settings["font_size"] = size
@@ -666,26 +827,51 @@ class MainWindow(QMainWindow):
     def _tab_changed(self, index: int):
         files_active = self.tabs.widget(index) is self.file_comparison
         directories_active = self.tabs.widget(index) is self.directory_comparison
+        merge_active = self.tabs.widget(index) is self.merge_view
         if not files_active:
             self.find_panel.hide()
+        if not merge_active:
+            self.merge_find_panel.hide()
         for action in self.find_actions:
-            action.setEnabled(files_active)
+            action.setEnabled(files_active or merge_active)
+        for action in self.merge_actions:
+            action.setEnabled(merge_active)
         for widget in (self.summary_label, self.encoding_label):
             widget.setVisible(files_active)
+        self.merge_view.encoding_button.setVisible(merge_active)
         self.directory_summary_label.setVisible(directories_active)
         if self._native_toolbar_bridge is None:
             self.toolbar.setVisible(files_active or directories_active)
+            self.merge_toolbar.setVisible(merge_active)
+        else:
+            self.toolbar.hide()
+            self.merge_toolbar.hide()
+            if merge_active and self._merge_native_toolbar_bridge is not None:
+                self._merge_native_toolbar_bridge.activate()
+            elif files_active or directories_active:
+                self._native_toolbar_bridge.activate()
+            else:
+                self._native_toolbar_bridge.set_visible(False)
+                if self._merge_native_toolbar_bridge is not None:
+                    self._merge_native_toolbar_bridge.set_visible(False)
+            if merge_active and self._merge_native_toolbar_bridge is None:
+                self.merge_toolbar.show()
         if files_active:
             self._refresh_titles()
         elif directories_active:
             self.setWindowTitle("Directories — Diffly")
+        elif merge_active:
+            self.setWindowTitle("Merge — Diffly")
         else:
             self.setWindowTitle("Settings — Diffly")
+        if self._native_toolbar_bridge is not None:
+            self._native_toolbar_bridge.native_window.setTitle_(self.windowTitle())
         self.statusBar().showMessage(
             "Open a file in each pane to compare" if files_active
             else self.directory_comparison.message if directories_active else ""
         )
         self._refresh_toolbar()
+        self._refresh_merge_toolbar()
 
     def _set_indent_width(self, width: int):
         self.config.settings["tab_width"] = width
@@ -694,6 +880,7 @@ class MainWindow(QMainWindow):
         font = editor_font(self.config.settings)
         for editor in (self.left, self.right):
             editor.set_font(font, width, width)
+        self.merge_view.set_appearance(self.config.themes[self._active_theme_name], font, width, width)
         self._update_horizontal_scroll_range()
         try:
             save_indent_width(width)
@@ -818,10 +1005,21 @@ class MainWindow(QMainWindow):
             "diffly.apply_right": (self.apply_right_action, "apply_right"),
             "diffly.paste": (self.paste_action, "paste"),
         }
-        bridge = install_inline_toolbar(self, actions)
+        bridge = install_inline_toolbar(self, actions, "com.diffly.files.toolbar")
         if bridge is not None:
             self._native_toolbar_bridge = bridge
             self.toolbar.hide()
+            if self.merge_enabled:
+                merge_actions = {
+                    "diffly.merge.previous": (self.merge_previous_action, "up"),
+                    "diffly.merge.next": (self.merge_next_action, "down"),
+                    "diffly.merge.left": (self.merge_use_left_action, "apply_right"),
+                    "diffly.merge.right": (self.merge_use_right_action, "apply_left"),
+                }
+                self._merge_native_toolbar_bridge = install_inline_toolbar(
+                    self, merge_actions, "com.diffly.merge.toolbar"
+                )
+            self._tab_changed(self.tabs.currentIndex())
             self._native_toolbar_attempts = 0
             return
         self._native_toolbar_attempts += 1
@@ -829,6 +1027,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self._configure_native_toolbar)
 
     def focused_editor(self):
+        if self.tabs.currentWidget() is self.merge_view:
+            return self.merge_view.result.editor
         if self.right.editor.hasFocus():
             return self.right.editor
         if self.left.editor.hasFocus():
@@ -915,15 +1115,9 @@ class MainWindow(QMainWindow):
     def _documents_changed(self, editor: EditorWidget):
         self._diff = None
         self._selected_hunk = -1
-        self.left.editor.set_placeholder_ranges(())
-        self.right.editor.set_placeholder_ranges(())
-        # Arrows would point at stale lines until the next diff arrives.
-        self.gutter.set_hunks(())
-        self._update_shared_scroll_range()
         self._refresh_toolbar()
-        self._refresh_stats()
-        # Keep the last colors while the next diff runs. QTextCursor selections
-        # follow edits; actions stay disabled until a current result arrives.
+        # Keep the old alignment and colors until the debounced diff is ready.
+        # Transfer actions are disabled while _diff is None.
         self._refresh_titles()
         self.debounce.start()
         if hasattr(self, "_syntax_timers"):
@@ -933,15 +1127,19 @@ class MainWindow(QMainWindow):
         text = editor.text()
         language = language_for(editor.state.path, text[:512])
         editor.set_syntax_language(language)
-        if language is None or len(text) > 2_000_000:
+        if not self.syntax_highlighting_enabled or language is None or len(text) > 2_000_000:
             editor.highlighter.set_spans(())
             return
         self.scheduler.submit_syntax(side, text, language, editor.state.revision)
 
     def _accept_syntax(self, result):
         side, revision, language, spans = result
+        if side.startswith("merge-"):
+            self.merge_view.accept_syntax(side, revision, language, spans)
+            return
         editor = self.left if side == "left" else self.right
-        if editor.state.revision != revision or editor.syntax_language != language:
+        if (not self.syntax_highlighting_enabled or editor.state.revision != revision
+                or editor.syntax_language != language):
             return
         editor.highlighter.set_spans(spans)
 
@@ -968,6 +1166,12 @@ class MainWindow(QMainWindow):
         self.gutter.set_hunks(result.hunks)
         self._cursor_hunk_changed(self.left if self._last_active_side == "left" else self.right)
         self.statusBar().showMessage(f"{len(result.hunks)} difference(s)")
+
+    def _accept_merge(self, result):
+        self.merge_view.accept_merge(result)
+
+    def _merge_error(self, message: str):
+        self.merge_view.merge_failed(message)
 
     def _diff_error(self, message: str):
         self.statusBar().showMessage(f"Comparison failed: {message}")
@@ -1246,6 +1450,8 @@ class MainWindow(QMainWindow):
     def _save_active(self, save_as: bool = False):
         if self.tabs.currentWidget() is self.file_comparison:
             self._save(self._active_pane(), save_as)
+        elif self.tabs.currentWidget() is self.merge_view:
+            self.merge_view.save(save_as)
 
     def _save(self, editor: EditorWidget, save_as: bool = False):
         if id(editor) in self._busy_files:
@@ -1296,20 +1502,34 @@ class MainWindow(QMainWindow):
         self.scheduler.submit_file(key, write_file, (path, text, newline, bom, expected, encoding), done, failed)
 
     def closeEvent(self, event: QCloseEvent):
-        if self._busy_files or self._directory_copy_busy:
+        self.git_merge_success = False
+        if self._busy_files or self._directory_copy_busy or self.merge_view.busy:
             QMessageBox.information(self, "Files busy", "Wait for file operations to finish before closing.")
             event.ignore()
             return
-        if any(editor.state.dirty for editor in (self.left, self.right)):
+        if self.git_mergetool:
+            if not self.git_merge_aborted and not self.merge_view.git_merge_complete():
+                answer = QMessageBox.question(
+                    self, "Incomplete Git merge",
+                    "Quit without a saved, resolved Git merge? Git will keep this file conflicted.")
+                if answer != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+        if (any(editor.state.dirty for editor in (self.left, self.right)) or
+                (self.merge_view.result.state.dirty and not self.git_mergetool)):
             answer = QMessageBox.question(self, "Unsaved changes", "Quit and discard unsaved changes?")
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.close()
+        if self._merge_native_toolbar_bridge is not None:
+            self._merge_native_toolbar_bridge.close()
         self.debounce.stop()
         for timer in self._syntax_timers.values():
             timer.stop()
+        self.merge_view._syntax_timer.stop()
         self.directory_comparison.cancel()
         self.scheduler.shutdown()
+        self.git_merge_success = self.git_mergetool and self.merge_view.git_merge_complete()
         event.accept()

@@ -12,3 +12,13 @@ def test_saved_and_recent_comparisons_round_trip(tmp_path, monkeypatch):
     assert len(data["recent"]) == 1
     save_sessions(data)
     assert load_sessions() == data
+
+
+def test_merge_session_paths_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("DIFFLY_CONFIG", str(tmp_path / "config.toml"))
+    data = load_sessions()
+    merge = {"kind": "merge", "base": "/tmp/base", "left": "/tmp/left",
+             "right": "/tmp/right", "result": "/tmp/result"}
+    remember(data, merge)
+    save_sessions(data)
+    assert load_sessions()["recent"] == [merge]

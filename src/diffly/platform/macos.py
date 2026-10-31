@@ -112,7 +112,7 @@ class NativeToolbar:
         )
 
     def _handle_mouse_event(self, event):
-        if event.window() != self.native_window:
+        if event.window() != self.native_window or self.native_window.toolbar() != self.toolbar:
             return event
         if self._suppress_mouse_up and event.type() == AppKit.NSEventTypeLeftMouseUp:
             self._suppress_mouse_up = False
@@ -149,6 +149,18 @@ class NativeToolbar:
                 self.delegate.hovered.discard(identifier)
         self.toolbar.validateVisibleItems()
 
+    def set_visible(self, visible: bool):
+        self.toolbar.setVisible_(visible)
+
+    def activate(self):
+        if self.native_window.toolbar() != self.toolbar:
+            self.native_window.setToolbar_(self.toolbar)
+            self.native_window.setToolbarStyle_(AppKit.NSWindowToolbarStyleUnifiedCompact)
+        self.native_window.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+        self.native_window.setTitle_(self.qt_window.windowTitle())
+        self.toolbar.setVisible_(True)
+        self.sync()
+
     def set_symbol(self, identifier, kind):
         self.delegate.symbols[identifier] = kind
         button = self.delegate.buttons.get(identifier)
@@ -170,7 +182,8 @@ class NativeToolbar:
             self._event_monitor = None
 
 
-def install_inline_toolbar(qt_window, action_map: dict) -> NativeToolbar | None:
+def install_inline_toolbar(qt_window, action_map: dict,
+                           identifier: str = "com.diffly.toolbar") -> NativeToolbar | None:
     """Attach an NSToolbar inline with the title, or leave the Qt toolbar intact."""
     if sys.platform != "darwin":
         return None
@@ -200,12 +213,14 @@ def install_inline_toolbar(qt_window, action_map: dict) -> NativeToolbar | None:
     delegate.items = {}
     delegate.buttons = {}
     delegate.hovered = set()
-    toolbar = AppKit.NSToolbar.alloc().initWithIdentifier_("com.diffly.merge")
+    toolbar = AppKit.NSToolbar.alloc().initWithIdentifier_(identifier)
     toolbar.setDelegate_(delegate)
     toolbar.setAllowsUserCustomization_(False)
     toolbar.setDisplayMode_(AppKit.NSToolbarDisplayModeIconOnly)
     native_window.setToolbar_(toolbar)
     native_window.setToolbarStyle_(AppKit.NSWindowToolbarStyleUnifiedCompact)
+    native_window.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+    native_window.setTitle_(qt_window.windowTitle())
     if native_window.toolbar() is None:
         return None
     bridge = NativeToolbar(qt_window, delegate, toolbar, native_window)

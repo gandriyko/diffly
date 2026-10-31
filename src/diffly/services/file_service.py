@@ -16,7 +16,7 @@ class LoadedFile:
     text: str
     newline: str
     bom: bool
-    stamp: FileStamp
+    stamp: FileStamp | None
     encoding: str = "utf-8"
 
 
@@ -73,6 +73,16 @@ def read_file(path: Path, encoding: str | None = None) -> LoadedFile:
     newline = "\r\n" if "\r\n" in text else "\r" if "\r" in text else "\n"
     stamp = FileStamp(after.st_size, after.st_mtime_ns, after.st_ino)
     return LoadedFile(text.replace("\r\n", "\n").replace("\r", "\n"), newline, bom, stamp, encoding)
+
+
+def read_merge_file(path: Path | None, encoding: str | None = None) -> LoadedFile:
+    """Read a merge source and reject binary-looking decoded content."""
+    if path is None:
+        return LoadedFile("", "\n", False, None)
+    loaded = read_file(path, encoding)
+    if any(ord(char) < 32 and char not in "\n\t" for char in loaded.text):
+        raise ValueError("Binary input is not supported for merging")
+    return loaded
 
 
 def write_file(path: Path, text: str, newline: str, bom: bool, expected: FileStamp | None,

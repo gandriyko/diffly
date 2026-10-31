@@ -17,6 +17,7 @@ class SettingsPage(QWidget):
     font_size_changed = Signal(int)
     indent_width_changed = Signal(int)
     comparison_changed = Signal(object)
+    editor_display_changed = Signal(bool, bool)
     filters_changed = Signal(object, bool, object)
 
     def __init__(self, settings: dict, themes: dict, parent=None):
@@ -68,6 +69,15 @@ class SettingsPage(QWidget):
         self.indent_width.addItem("4 spaces", 4)
         self.indent_width.setCurrentIndex(0 if int(settings.get("tab_width", 4)) == 2 else 1)
         self._setting_row(appearance_layout, "Tab stops and guides", self.indent_width)
+
+        display, display_layout = self._section(layout, "Editor display")
+        self.show_line_numbers = QCheckBox("Show line numbers in Files and Merge", display)
+        self.show_line_numbers.setChecked(bool(settings.get("show_line_numbers", False)))
+        self.syntax_highlighting = QCheckBox("Syntax highlighting in Files and Merge", display)
+        self.syntax_highlighting.setChecked(bool(settings.get("syntax_highlighting", True)))
+        for check in (self.show_line_numbers, self.syntax_highlighting):
+            check.setMinimumHeight(30)
+            display_layout.addWidget(check)
 
         comparison, comparison_layout = self._section(layout, "File comparison")
         self.compare_checks = {}
@@ -134,6 +144,8 @@ class SettingsPage(QWidget):
         self.theme_choice.currentIndexChanged.connect(lambda: self.theme_changed.emit(self.theme_choice.currentData()))
         self.font_size.editingFinished.connect(self._commit_font_size)
         self.indent_width.currentIndexChanged.connect(lambda: self.indent_width_changed.emit(self.indent_width.currentData()))
+        self.show_line_numbers.toggled.connect(self._emit_editor_display)
+        self.syntax_highlighting.toggled.connect(self._emit_editor_display)
         for check in self.compare_checks.values():
             check.toggled.connect(self._emit_comparison)
         self.gitignore.toggled.connect(self._emit_filters)
@@ -174,6 +186,10 @@ class SettingsPage(QWidget):
 
     def comparison_options(self) -> CompareOptions:
         return CompareOptions(**{key: check.isChecked() for key, check in self.compare_checks.items()})
+
+    def _emit_editor_display(self):
+        self.editor_display_changed.emit(self.show_line_numbers.isChecked(),
+                                         self.syntax_highlighting.isChecked())
 
     def set_comparison_options(self, options: CompareOptions) -> None:
         for key, check in self.compare_checks.items():

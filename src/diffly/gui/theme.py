@@ -56,6 +56,13 @@ def save_font_size(size: int) -> None:
     _save_settings({"font_size": str(size)})
 
 
+def save_editor_display_options(line_numbers: bool, syntax_highlighting: bool) -> None:
+    _save_settings({
+        "show_line_numbers": "true" if line_numbers else "false",
+        "syntax_highlighting": "true" if syntax_highlighting else "false",
+    })
+
+
 def save_comparison_options(options) -> None:
     _save_settings({key: "true" if getattr(options, key) else "false" for key in
                     ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")})
@@ -165,6 +172,9 @@ def apply_theme(app: QApplication, theme: dict):
         QToolButton#FindPanelButton {{ color: {c['text']}; background: {c['button']};
             border: 1px solid {c['border']}; border-radius: 4px; min-width: 26px; padding: 4px; }}
         QToolButton#FindPanelButton:hover {{ background: {c['button_hover']}; }}
+        QPushButton#MergeGutterButton {{ color: {c['text']}; background: transparent;
+            border: 1px solid transparent; border-radius: 3px; padding: 0; font-weight: bold; }}
+        QPushButton#MergeGutterButton:hover {{ border-color: {c['border']}; }}
         QLabel, QMenuBar, QMenu, QStatusBar {{ color: {c['text']}; background: {c['surface']}; }}
         QLabel#PaneTitle {{ color: {c['text']}; padding: 5px 8px; }}
         QWidget#LinuxTitleBar {{ background: {c['surface']}; border-bottom: 1px solid {c['border']}; }}

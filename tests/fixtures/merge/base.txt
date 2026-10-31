@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Merge fixture: focused Python conflict scenarios. See README.md."""
+
+# CASE 01: same_line_replacement
+def case_01_same_line_replacement():
+    value = "original"
+    return "case 01"
+# END CASE 01
+
+# CASE 02: competing_single_insertions
+def case_02_competing_single_insertions():
+    pass
+    return "case 02"
+# END CASE 02
+
+# CASE 03: delete_versus_modify
+def case_03_delete_versus_modify():
+    obsolete = "keep or remove"
+    return "case 03"
+# END CASE 03
+
+# CASE 04: medium_unequal_replacement
+def case_04_medium_unequal_replacement():
+    values = [
+    "medium_01_base",
+    "medium_02_base",
+    "medium_03_base",
+    "medium_04_base",
+    "medium_05_base",
+    "medium_06_base",
+    "medium_07_base",
+    "medium_08_base",
+    ]
+    return "case 04"
+# END CASE 04
+
+# CASE 05: large_unequal_replacement
+def case_05_large_unequal_replacement():
+    values = [
+    "large_01_base",
+    "large_02_base",
+    "large_03_base",
+    "large_04_base",
+    "large_05_base",
+    "large_06_base",
+    "large_07_base",
+    "large_08_base",
+    "large_09_base",
+    "large_10_base",
+    "large_11_base",
+    "large_12_base",
+    "large_13_base",
+    "large_14_base",
+    "large_15_base",
+    "large_16_base",
+    "large_17_base",
+    "large_18_base",
+    "large_19_base",
+    "large_20_base",
+    "large_21_base",
+    "large_22_base",
+    "large_23_base",
+    "large_24_base",
+    "large_25_base",
+    ]
+    return "case 05"
+# END CASE 05
+
+# CASE 06: competing_multiline_insertions
+def case_06_competing_multiline_insertions():
+    pass
+    return "case 06"
+# END CASE 06
+
+# CASE 07: overlapping_replacement_ranges
+def case_07_overlapping_replacement_ranges():
+    range_01 = "base 1"
+    range_02 = "base 2"
+    range_03 = "base 3"
+    range_04 = "base 4"
+    range_05 = "base 5"
+    range_06 = "base 6"
+    range_07 = "base 7"
+    range_08 = "base 8"
+    return "case 07"
+# END CASE 07
+
+# CASE 08: whitespace_versus_content
+def case_08_whitespace_versus_content():
+    indent = "same"
+    return "case 08"
+# END CASE 08
+
+# CASE 09: case_versus_content
+def case_09_case_versus_content():
+    mode = "ready"
+    return "case 09"
+# END CASE 09
+
+# CASE 10: unicode_competing_changes
+def case_10_unicode_competing_changes():
+    label = "Київ 😀"
+    return "case 10"
+# END CASE 10
+
+# CASE 11: blank_line_delete_versus_comment
+def case_11_blank_line_delete_versus_comment():
+    first = 1
+
+    second = 2
+    return "case 11"
+# END CASE 11
+
+# CASE 12: identical_replacement
+def case_12_identical_replacement():
+    shared = "old"
+    return "case 12"
+# END CASE 12
+
+# CASE 13: left_only_multiline_insertion
+def case_13_left_only_multiline_insertion():
+    before = "stable"
+    return "case 13"
+# END CASE 13
+
+# CASE 14: right_only_multiline_deletion
+def case_14_right_only_multiline_deletion():
+    doomed_a = "one"
+    doomed_b = "two"
+    doomed_c = "three"
+    return "case 14"
+# END CASE 14
+
+# CASE 15: adjacent_independent_edits
+def case_15_adjacent_independent_edits():
+    left_target = "base"
+    right_target = "base"
+    return "case 15"
+# END CASE 15
+
+# CASE 16: identical_multiline_insertion
+def case_16_identical_multiline_insertion():
+    pass
+    return "case 16"
+# END CASE 16
+
+# CASE 17: same_line_different_columns
+def case_17_same_line_different_columns():
+    settings = {"timeout": 10, "retries": 2}
+    return "case 17"
+# END CASE 17
+
+# CASE 18: large_delete_versus_rewrite
+def case_18_large_delete_versus_rewrite():
+    entries = [
+    "old_01_base",
+    "old_02_base",
+    "old_03_base",
+    "old_04_base",
+    "old_05_base",
+    "old_06_base",
+    "old_07_base",
+    "old_08_base",
+    "old_09_base",
+    "old_10_base",
+    "old_11_base",
+    "old_12_base",
+    "old_13_base",
+    "old_14_base",
+    "old_15_base",
+    "old_16_base",
+    "old_17_base",
+    "old_18_base",
+    ]
+    return "case 18"
+# END CASE 18
+
+# CASE 19: nested_overlap_with_shared_edges
+def case_19_nested_overlap_with_shared_edges():
+    nested_01 = "base 1"
+    nested_02 = "base 2"
+    nested_03 = "base 3"
+    nested_04 = "base 4"
+    nested_05 = "base 5"
+    nested_06 = "base 6"
+    nested_07 = "base 7"
+    nested_08 = "base 8"
+    nested_09 = "base 9"
+    nested_10 = "base 10"
+    return "case 19"
+# END CASE 19
+
+# CASE 20: right_only_change_after_conflict
+def case_20_right_only_change_after_conflict():
+    status = "pending"
+    return "case 20"
+# END CASE 20
+
+# CASE 21: three_consecutive_same_length_conflicts
+def case_21_three_consecutive_same_length_conflicts():
+    alpha = "base"
+    beta = "base"
+    gamma = "base"
+    return "case 21"
+# END CASE 21
+
+# CASE 22: simultaneous_tail_insertions
+def case_22_simultaneous_tail_insertions():
+    anchor = "keep"
+    return "case 22"
+# END CASE 22
+
+# CASE 23: literal_marker_text_and_real_conflict
+def case_23_literal_marker_text_and_real_conflict():
+    marker = "<<<<<<< LEFT"
+    next_value = "base"
+    return "case 23"
+# END CASE 23
+
+# CASE 24: right_only_expansion
+def case_24_right_only_expansion():
+    result = "old"
+    return "case 24"
+# END CASE 24
+
+# CASE 25: left_only_expansion
+def case_25_left_only_expansion():
+    result = "old"
+    return "case 25"
+# END CASE 25
+
+# CASE 26: identical_deletion
+def case_26_identical_deletion():
+    remove_a = "both delete"
+    remove_b = "both delete"
+    return "case 26"
+# END CASE 26
+
+# CASE 27: partial_overlap_near_end
+def case_27_partial_overlap_near_end():
+    tail_01 = "base 1"
+    tail_02 = "base 2"
+    tail_03 = "base 3"
+    tail_04 = "base 4"
+    tail_05 = "base 5"
+    tail_06 = "base 6"
+    return "case 27"
+# END CASE 27
+
+# CASE 28: final_line_conflict
+def case_28_final_line_conflict():
+    final = "base"
+    return "case 28"
+# END CASE 28

@@ -36,6 +36,26 @@ def _pixmap(kind: str, color: str) -> QPixmap:
         painter.drawLine(QPointF(8, 11), QPointF(16, 11))
         painter.drawLine(QPointF(8, 15), QPointF(16, 15))
         painter.drawLine(QPointF(8, 19), QPointF(13, 19))
+    elif kind == "save":
+        painter.drawRoundedRect(QRectF(4, 3, 16, 18), 1.5, 1.5)
+        painter.drawRect(QRectF(8, 3, 8, 6))
+        painter.drawRoundedRect(QRectF(8, 13, 8, 8), 1, 1)
+    elif kind == "check":
+        painter.drawLine(QPointF(4, 12), QPointF(10, 18))
+        painter.drawLine(QPointF(10, 18), QPointF(20, 5))
+    elif kind == "base":
+        painter.drawLine(QPointF(5, 5), QPointF(5, 19))
+        painter.drawLine(QPointF(5, 5), QPointF(13, 5))
+        painter.drawLine(QPointF(5, 12), QPointF(15, 12))
+        painter.drawLine(QPointF(5, 19), QPointF(13, 19))
+        painter.drawLine(QPointF(13, 5), QPointF(18, 9))
+        painter.drawLine(QPointF(18, 9), QPointF(15, 12))
+        painter.drawLine(QPointF(15, 12), QPointF(18, 16))
+        painter.drawLine(QPointF(18, 16), QPointF(13, 19))
+    elif kind == "more":
+        painter.setBrush(ink)
+        for x in (5, 12, 19):
+            painter.drawEllipse(QPointF(x, 12), 1.3, 1.3)
     elif kind in ("apply_left", "apply_right"):
         # A full-width arrow keeps the destination clear at toolbar size.
         arrow_pen = QPen(ink, 2.2)

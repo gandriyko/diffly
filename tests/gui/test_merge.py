@@ -112,6 +112,39 @@ def test_internal_placeholder_aligns_matching_lines_without_editing_text(qtbot):
     window.close()
 
 
+def test_files_gutter_arrows_follow_each_pane_through_placeholder_scroll(qtbot, monkeypatch, tmp_path):
+    from pathlib import Path
+
+    monkeypatch.setenv("DIFFLY_CONFIG", str(tmp_path / "config.toml"))
+    fixture = Path(__file__).parents[1] / "fixtures" / "diff"
+    window = MainWindow()
+    window.resize(1000, 700)
+    window.tabs.setCurrentWidget(window.file_comparison)
+    qtbot.addWidget(window)
+    window.show()
+    left = (fixture / "python_left.py").read_text()
+    right = (fixture / "python_right.py").read_text()
+    window.left.load_text(left)
+    window.right.load_text(right)
+    window._accept_diff(compare(left, right, window.left.state.revision,
+                                window.right.state.revision))
+    hunk = next(hunk for hunk in window._diff.hunks
+                if hunk.left_end > hunk.left_start and hunk.right_end > hunk.right_start
+                and hunk.left_start >= 20)
+    row = window._diff.hunks.index(hunk)
+    for value in range(window.shared_scrollbar.maximum() + 1):
+        window.shared_scrollbar.setValue(value)
+        edges = window.gutter._edges(hunk)
+        if edges is not None and abs(edges[0] - edges[2]) > 1:
+            break
+    else:
+        raise AssertionError("fixture did not scroll through a placeholder")
+    left_top, _left_bottom, right_top, _right_bottom = edges
+    assert window.gutter._button_at(window.gutter.button_rect(left_top, True).center()) == (row, True)
+    assert window.gutter._button_at(window.gutter.button_rect(right_top, False).center()) == (row, False)
+    window.close()
+
+
 def test_click_changed_line_selects_diff_for_toolbar(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
