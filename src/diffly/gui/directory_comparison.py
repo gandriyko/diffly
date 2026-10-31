@@ -6,7 +6,7 @@ from threading import Event
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QSplitter, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -30,6 +30,7 @@ class DirectoryComparisonView(QWidget):
     def __init__(self, scheduler, patterns: list[str], parent=None, use_gitignore: bool = True,
                  enabled_presets: tuple[str, ...] = DEFAULT_PRESETS):
         super().__init__(parent)
+        self.setObjectName("DirectoryComparisonView")
         self.scheduler = scheduler
         self.patterns = list(patterns)
         self.use_gitignore = use_gitignore
@@ -48,6 +49,10 @@ class DirectoryComparisonView(QWidget):
         layout.setSpacing(7)
         self.left_path = QLineEdit(self)
         self.right_path = QLineEdit(self)
+        self.left_path.setObjectName("DirectoryPath")
+        self.right_path.setObjectName("DirectoryPath")
+        self.left_path.setFrame(False)
+        self.right_path.setFrame(False)
         self.message = "Choose two directories to compare"
 
         self.left_tree = self._make_tree("Left")
@@ -98,8 +103,9 @@ class DirectoryComparisonView(QWidget):
     def _make_tree(self, side: str) -> QTreeWidget:
         tree = QTreeWidget(self)
         tree.setObjectName(f"{side}DirectoryTree")
+        tree.setFrameShape(QFrame.Shape.NoFrame)
         tree.setHeaderLabels((side, "Result"))
-        tree.setAlternatingRowColors(True)
+        tree.setAlternatingRowColors(False)
         tree.setUniformRowHeights(True)
         tree.setColumnWidth(0, 230)
         return tree

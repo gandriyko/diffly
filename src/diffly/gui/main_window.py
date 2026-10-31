@@ -158,6 +158,7 @@ class MainWindow(QMainWindow):
         self._native_toolbar_attempts = 0
         self._native_toolbar_bridge = None
         self._merge_native_toolbar_bridge = None
+        self._settings_native_toolbar_bridge = None
         self._append_mode = False
         QApplication.instance().installEventFilter(_ShiftWatcher(self._set_append_mode, self))
 
@@ -251,6 +252,7 @@ class MainWindow(QMainWindow):
         self._make_menu()
         self._make_toolbar()
         self._make_merge_toolbar()
+        self._make_settings_toolbar()
         self.merge_view.state_changed.connect(self._refresh_merge_toolbar)
         self._recent_timer = QTimer(self)
         self._recent_timer.setSingleShot(True)
@@ -628,6 +630,18 @@ class MainWindow(QMainWindow):
         toolbar.hide()
         self._refresh_merge_toolbar()
 
+    def _make_settings_toolbar(self):
+        toolbar = QToolBar("Settings controls", self._linux_titlebar or self)
+        toolbar.setObjectName("DifflyToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        if self._linux_titlebar is None:
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        else:
+            self._linux_titlebar.add_toolbar(toolbar)
+        self.settings_toolbar = toolbar
+        toolbar.hide()
+
     def _refresh_merge_toolbar(self):
         if not hasattr(self, "merge_toolbar"):
             return
@@ -829,6 +843,7 @@ class MainWindow(QMainWindow):
         files_active = self.tabs.widget(index) is self.file_comparison
         directories_active = self.tabs.widget(index) is self.directory_comparison
         merge_active = self.tabs.widget(index) is self.merge_view
+        settings_active = self.tabs.widget(index) is self.settings_page
         if not files_active:
             self.find_panel.hide()
         if not merge_active:
@@ -843,21 +858,28 @@ class MainWindow(QMainWindow):
         self.merge_view.encoding_button.setVisible(merge_active)
         self.directory_summary_label.setVisible(directories_active)
         if self._native_toolbar_bridge is None:
+            self.settings_toolbar.setFixedHeight(max(self.toolbar.height(), self.merge_toolbar.height()))
             self.toolbar.setVisible(files_active or directories_active)
             self.merge_toolbar.setVisible(merge_active)
+            self.settings_toolbar.setVisible(settings_active)
         else:
             self.toolbar.hide()
             self.merge_toolbar.hide()
-            if merge_active and self._merge_native_toolbar_bridge is not None:
-                self._merge_native_toolbar_bridge.activate()
-            elif files_active or directories_active:
-                self._native_toolbar_bridge.activate()
-            else:
-                self._native_toolbar_bridge.set_visible(False)
+            self.settings_toolbar.hide()
+            if merge_active:
                 if self._merge_native_toolbar_bridge is not None:
-                    self._merge_native_toolbar_bridge.set_visible(False)
-            if merge_active and self._merge_native_toolbar_bridge is None:
-                self.merge_toolbar.show()
+                    self._merge_native_toolbar_bridge.activate()
+                else:
+                    self._native_toolbar_bridge.set_visible(False)
+                    self.merge_toolbar.show()
+            elif settings_active:
+                if self._settings_native_toolbar_bridge is not None:
+                    self._settings_native_toolbar_bridge.activate()
+                else:
+                    self._native_toolbar_bridge.set_visible(False)
+                    self.settings_toolbar.show()
+            else:
+                self._native_toolbar_bridge.activate()
         if files_active:
             self._refresh_titles()
         elif directories_active:
@@ -1021,6 +1043,9 @@ class MainWindow(QMainWindow):
                 self._merge_native_toolbar_bridge = install_inline_toolbar(
                     self, merge_actions, "com.diffly.merge.toolbar"
                 )
+            self._settings_native_toolbar_bridge = install_inline_toolbar(
+                self, {}, "com.diffly.settings.toolbar"
+            )
             self._tab_changed(self.tabs.currentIndex())
             self._native_toolbar_attempts = 0
             return
@@ -1527,6 +1552,8 @@ class MainWindow(QMainWindow):
             self._native_toolbar_bridge.close()
         if self._merge_native_toolbar_bridge is not None:
             self._merge_native_toolbar_bridge.close()
+        if self._settings_native_toolbar_bridge is not None:
+            self._settings_native_toolbar_bridge.close()
         self.debounce.stop()
         for timer in self._syntax_timers.values():
             timer.stop()

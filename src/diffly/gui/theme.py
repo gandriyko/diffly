@@ -198,8 +198,11 @@ def apply_theme(app: QApplication, theme: dict):
         QWidget#SettingsPage QCheckBox {{ color: {c['text']}; spacing: 9px; }}
         QToolButton#EncodingButton::menu-indicator {{ image: none; width: 0px; }}
         QToolButton#DirectoryBrowseButton {{ background: {c['button']};
-            border: 1px solid {c['border']}; border-radius: 4px; }}
+            border: none; border-radius: 4px; }}
         QToolButton#DirectoryBrowseButton:hover {{ background: {c['button_hover']}; }}
+        QWidget#DirectoryComparisonView QLineEdit#DirectoryPath {{ border: none; }}
+        QWidget#DirectoryComparisonView QTreeWidget {{ border: none; }}
+        QWidget#DirectoryComparisonView QHeaderView::section {{ border: none; }}
         QTabWidget#ComparisonTabs::pane {{ border: none; }}
         QTabBar::tab {{ color: {c['muted']}; background: {c['surface']};
             border: none; border-bottom: 2px solid transparent; padding: 7px 18px; }}
