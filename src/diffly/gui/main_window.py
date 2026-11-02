@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from diffly.core.diff.engine import CompareOptions
 from diffly.core.directories.filters import DEFAULT_PRESETS, PRESETS
 from diffly.gui.directory_comparison import DirectoryComparisonView
-from diffly.gui.file_comparison import FileComparisonView
+from diffly.gui.file_comparison import NAV_MODIFIER, FileComparisonView
 from diffly.gui.find_panel import FindPanel
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.settings_page import SettingsPage
@@ -37,9 +37,6 @@ from diffly.services.directory_service import (
 )
 from diffly.services.task_scheduler import TaskScheduler
 from diffly.services.session_store import load_sessions, remember, save_sessions
-
-# Tooltip name of the Ctrl+Alt shortcut prefix (Qt maps Ctrl to Command on macOS).
-NAV_MODIFIER = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
 
 def _suppress_dialogs():
     """DIFFLY_NO_DIALOGS=1: never block on a modal dialog in tests or scripted runs.

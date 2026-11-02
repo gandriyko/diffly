@@ -17,6 +17,9 @@ from diffly.gui.seamless_splitter import SeamlessSplitter
 from diffly.gui.syntax_controller import SyntaxController
 from diffly.services.file_service import file_stamp, read_text_file, status_encoding_text, write_file
 
+# Display name of the Ctrl+Alt shortcut prefix (Qt maps Ctrl to Command on macOS).
+NAV_MODIFIER = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
+
 
 class FileComparisonView(QWidget):
     """Left and right editors with diff alignment, gutter transfers and an overview.
@@ -283,8 +286,7 @@ class FileComparisonView(QWidget):
         self.selected_hunk = row
         self.active_pane().editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.state_changed.emit()
-        modifier = "Cmd+Option" if sys.platform == "darwin" else "Ctrl+Alt"
-        self.status_changed.emit(f"Difference {row + 1} of {len(self.diff.hunks)} · {modifier}+← / → to apply")
+        self.status_changed.emit(f"Difference {row + 1} of {len(self.diff.hunks)} · {NAV_MODIFIER}+← / → to apply")
 
     def navigate(self, step: int):
         if self.diff is None or not self.diff.hunks:
