@@ -247,6 +247,14 @@ def test_merge_honours_comparison_options_for_overlapping_changes():
     assert merged.conflicts == () and merged.text == right
 
 
+def test_merge_reports_change_kinds_and_character_spans():
+    from diffly.core.diff.engine import TextSpan
+    merged = merge("a\nb\n", "a\nbX\n", "a\nb\nc\n", (0, 0, 0))
+    assert merged.left_changes == ((1, 2, "replace"),)
+    assert merged.right_changes == ((2, 3, "insert"),)
+    assert TextSpan(1, 1, 2) in merged.left_spans
+
+
 def test_merge_encoding_menu_redecodes_sources(qtbot, tmp_path):
     paths = tuple(tmp_path / name for name in ("base", "left", "right"))
     for path in paths:

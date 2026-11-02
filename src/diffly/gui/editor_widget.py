@@ -92,22 +92,33 @@ class EditorWidget(QWidget):
             missing = (other_end - other_start) - (end - start)
             if missing > 0:
                 placeholders.append((end, missing))
-            if start == end:
-                continue
             key = "diff_replace" if hunk.tag == "replace" else (
                 "diff_removed" if left else "diff_added"
             )
-            color = QColor(self.theme.get(key, "#fff1b8"))
-            for line in range(start, end):
-                block = self.editor.document().findBlockByNumber(line)
-                if not block.isValid():
-                    break
-                selection = QTextEdit.ExtraSelection()
-                selection.cursor = QTextCursor(block)
-                selection.format = QTextCharFormat()
-                selection.format.setBackground(color)
-                selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
-                selections.append(selection)
+            selections += self.line_selections(start, end, key)
+        selections += self.span_selections(spans)
+        self.editor.setExtraSelections(selections)
+        self.editor.set_placeholder_ranges(tuple(placeholders))
+
+    def line_selections(self, start: int, end: int, theme_key: str) -> list:
+        """Full-width backgrounds for lines [start, end) in a theme color."""
+        color = QColor(self.theme[theme_key])
+        selections = []
+        for line in range(start, end):
+            block = self.editor.document().findBlockByNumber(line)
+            if not block.isValid():
+                break
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(block)
+            selection.format = QTextCharFormat()
+            selection.format.setBackground(color)
+            selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+            selections.append(selection)
+        return selections
+
+    def span_selections(self, spans) -> list:
+        """Stronger backgrounds for changed characters within lines."""
+        selections = []
         for span in spans:
             block = self.editor.document().findBlockByNumber(span.line)
             if not block.isValid():
@@ -122,10 +133,9 @@ class EditorWidget(QWidget):
             selection.cursor.setPosition(start)
             selection.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
             selection.format = QTextCharFormat()
-            selection.format.setBackground(QColor(self.theme.get("diff_text", "#d38b44")))
+            selection.format.setBackground(QColor(self.theme["diff_text"]))
             selections.append(selection)
-        self.editor.setExtraSelections(selections)
-        self.editor.set_placeholder_ranges(tuple(placeholders))
+        return selections
 
     def select_hunk(self, start: int, end: int, column: int = 0):
         document = self.editor.document()

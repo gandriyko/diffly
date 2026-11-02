@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
-    QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QToolBar,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -34,12 +35,13 @@ from diffly.gui.icons import toolbar_icon
 from diffly.gui.settings_page import SettingsPage
 from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.merge_view import MergeView
+from diffly.gui.seamless_splitter import SeamlessSplitter
 from diffly.gui.theme import (
     apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
     save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
-from diffly.services.file_service import ENCODINGS, encoding_label, file_stamp, read_text_file, write_file
+from diffly.services.file_service import ENCODINGS, file_stamp, read_text_file, status_encoding_text, write_file
 from diffly.services.directory_service import (
     copy_directory_checked, copy_file_checked, directory_stamp, path_stamp, regular_file_stamp,
 )
@@ -162,29 +164,48 @@ class MainWindow(QMainWindow):
         self.right_title.setObjectName("PaneTitle")
         root = QWidget()
         root.setObjectName("DifflyRoot")
-        layout = QGridLayout(root)
+        layout = QVBoxLayout(root)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setHorizontalSpacing(0)
-        layout.setVerticalSpacing(0)
-        layout.addWidget(self.left_title, 0, 0)
-        layout.addWidget(self.right_title, 0, 2)
-        layout.addWidget(self.left, 1, 0)
-        layout.addWidget(self.right, 1, 2)
+        layout.setSpacing(0)
         self.shared_scrollbar = QScrollBar(Qt.Orientation.Vertical, root)
         self.shared_scrollbar.hide()
         self.gutter = DiffGutter(self.left.editor, self.right.editor, self.shared_scrollbar, root)
         self.gutter.transfer_requested.connect(self._transfer)
-        layout.addWidget(self.gutter, 1, 1)
         self.overview = DiffOverview(self.left.editor, self.right.editor, self.shared_scrollbar, root)
-        layout.addWidget(self.overview, 1, 3)
+        # Same resizable pane layout as the Merge and Directories tabs.
+        panes = []
+        for title, editor, extra in ((self.left_title, self.left, None),
+                                     (self.right_title, self.right, self.overview)):
+            panel = QWidget(root)
+            panel.setMinimumWidth(150)
+            column = QVBoxLayout(panel)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            column.addWidget(title)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(0)
+            row.addWidget(editor, 1)
+            if extra is not None:
+                row.addWidget(extra)
+            column.addLayout(row, 1)
+            panes.append(panel)
+        splitter = SeamlessSplitter(Qt.Orientation.Horizontal, root)
+        splitter.setHandleWidth(0)
+        splitter.addWidget(panes[0])
+        splitter.addWidget(self.gutter)
+        splitter.addWidget(panes[1])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
+        splitter.setCollapsible(1, False)
+        splitter.setSizes([450, self.gutter.width(), 450])
+        layout.addWidget(splitter, 1)
         self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
         self.shared_horizontal_scrollbar.installEventFilter(self)
-        layout.addWidget(self.shared_horizontal_scrollbar, 2, 0, 1, 3)
+        layout.addWidget(self.shared_horizontal_scrollbar)
         self.find_panel = FindPanel(self, root)
-        layout.addWidget(self.find_panel, 3, 0, 1, 4)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(2, 1)
-        layout.setRowStretch(1, 1)
+        layout.addWidget(self.find_panel)
         self.file_comparison = root
         self.directory_comparison = DirectoryComparisonView(
             self.scheduler, list(self.config.settings.get("ignore_patterns", [])), self,
@@ -1132,8 +1153,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_titles(self):
         for editor, label, side in ((self.left, self.left_title, "Left"), (self.right, self.right_title, "Right")):
-            name = str(editor.state.path) if editor.state.path else "Untitled"
-            label.setText(f"{side}: {name}{' *' if editor.state.dirty else ''}")
+            name = editor.state.path.name if editor.state.path else "Untitled"
+            label.setText(f"{side} · {name}{' •' if editor.state.dirty else ''}")
+            label.setToolTip(str(editor.state.path) if editor.state.path else "")
         self._refresh_encoding_label()
         if self.tabs.currentWidget() is self.file_comparison:
             left = self.left.state.path.name if self.left.state.path else "Untitled"
@@ -1151,10 +1173,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_encoding_label(self):
         state = self._active_pane().state
-        label = encoding_label(state.encoding)
-        if state.bom:
-            label += " BOM"
-        self.encoding_label.setText(f"Encoding: {label}")
+        self.encoding_label.setText(status_encoding_text(state.encoding, state.bom, state.newline))
 
     def _choose_encoding(self, encoding: str | None):
         editor = self._active_pane()
