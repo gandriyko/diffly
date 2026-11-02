@@ -36,17 +36,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    if sys.platform == "darwin":
-        from Foundation import NSProcessInfo
-
-        NSProcessInfo.processInfo().setProcessName_("Diffly")
-    app = QApplication([sys.argv[0]])
-    app.setApplicationName("Diffly")
-    app.setApplicationDisplayName("Diffly")
-    window = MainWindow(merge_enabled=args.merge is not None, git_mergetool=args.git_mergetool)
-    window.show()
+def open_requested(window: MainWindow, args: argparse.Namespace):
+    """Open the merge, directories or files named on the command line."""
     if args.merge is not None:
         paths = tuple(path.expanduser().absolute() if path is not None else None for path in args.merge)
         output = args.output.expanduser().absolute() if args.output is not None else None
@@ -61,11 +52,25 @@ def main(argv: list[str] | None = None) -> int:
         view.compare()
     else:
         if args.left is not None or args.right is not None:
-            window.tabs.setCurrentWidget(window.file_comparison)
+            window.tabs.setCurrentWidget(window.files)
         if args.left is not None:
-            window.open_path(window.left, args.left.expanduser().absolute())
+            window.files.open_path(window.files.left, args.left.expanduser().absolute())
         if args.right is not None:
-            window.open_path(window.right, args.right.expanduser().absolute())
+            window.files.open_path(window.files.right, args.right.expanduser().absolute())
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if sys.platform == "darwin":
+        from Foundation import NSProcessInfo
+
+        NSProcessInfo.processInfo().setProcessName_("Diffly")
+    app = QApplication([sys.argv[0]])
+    app.setApplicationName("Diffly")
+    app.setApplicationDisplayName("Diffly")
+    window = MainWindow(merge_enabled=args.merge is not None, git_mergetool=args.git_mergetool)
+    window.show()
+    open_requested(window, args)
 
     # Qt's C++ event loop otherwise leaves Python without an opportunity to
     # dispatch SIGINT. Close the window so unsaved-change checks still run.
