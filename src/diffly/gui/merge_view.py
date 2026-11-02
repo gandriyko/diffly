@@ -6,16 +6,17 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QTextEdit, QToolButton,
+                               QPushButton, QScrollBar, QTextEdit, QToolButton,
                                QVBoxLayout, QWidget, QMenu)
 
+from diffly.core.diff.engine import CompareOptions
 from diffly.core.documents.syntax import language_for
 from diffly.core.merge.three_way import MergeResult
 from diffly.gui.diff_gutter import draw_ribbon
 from diffly.gui.editor_widget import EditorWidget
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.seamless_splitter import SeamlessSplitter
-from diffly.services.file_service import file_stamp, read_merge_file, write_file
+from diffly.services.file_service import ENCODINGS, encoding_label, file_stamp, read_text_file, write_file
 
 
 def _merge_language(path: Path | None, text: str) -> str | None:
@@ -274,6 +275,10 @@ class MergeView(QWidget):
         self._busy = False
         self._loading = False
         self._syncing_scroll = False
+        self._syncing_horizontal = False
+        self._navigated = False
+        self._navigating = False
+        self.compare_options = CompareOptions()
         self._history: list[tuple] = []
         self._history_index = -1
         self._choice = False
@@ -315,11 +320,8 @@ class MergeView(QWidget):
         self.encoding_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.encoding_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         encoding_menu = QMenu(self.encoding_button)
-        encoding_menu.addAction("Auto (Left)", lambda: self._set_encoding(self._loaded[1].encoding if self._loaded else "utf-8"))
-        for label, encoding in (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
-                                ("UTF-16 BE", "utf-16-be"), ("Windows-1251", "cp1251"),
-                                ("Windows-1252", "cp1252"), ("ISO-8859-1", "iso8859-1"),
-                                ("Windows-1250", "cp1250"), ("Shift JIS", "shift_jis")):
+        encoding_menu.addAction("Auto", lambda: self._set_encoding(None))
+        for label, encoding in ENCODINGS:
             encoding_menu.addAction(label, lambda checked=False, value=encoding: self._set_encoding(value))
         self.encoding_button.setMenu(encoding_menu)
         for key in ("Previous conflict", "Next conflict", "Use Base", "Mark Resolved", "Save Result"):
@@ -347,10 +349,11 @@ class MergeView(QWidget):
             editor.editor.document().setDocumentMargin(4)
             editor.editor.set_line_numbers_visible(self.line_numbers_visible)
             editor.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            editor.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             editor.editor.installEventFilter(self)
+            editor.editor.viewport().installEventFilter(self)
         for editor in self.sources:
             editor.editor.setReadOnly(True)
-            editor.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         center_layout.addWidget(self.result, 1)
         right_row = QHBoxLayout()
         right_row.setContentsMargins(0, 0, 0, 0)
@@ -374,11 +377,20 @@ class MergeView(QWidget):
         top.setSizes([290, 34, 400, 34, 290])
         base_panel.hide()
         outer.addWidget(top, 1)
+        # One horizontal scrollbar for all visible panes, as in the Files tab.
+        self.horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self.horizontal_scrollbar.hide()
+        self.horizontal_scrollbar.valueChanged.connect(self._sync_horizontal)
+        outer.addWidget(self.horizontal_scrollbar)
         self.footer = QLabel("0 conflicts · 0 unresolved")
         self.result.editor.document().contentsChange.connect(self._result_changed)
         for pane in (self.sources[1], self.result, self.sources[2]):
             pane.editor.verticalScrollBar().valueChanged.connect(
                 lambda value, source=pane: self._sync_scroll(source, value))
+            pane.editor.horizontalScrollBar().valueChanged.connect(self._sync_horizontal)
+            pane.editor.horizontalScrollBar().rangeChanged.connect(self._update_horizontal_range)
+            pane.editor.cursorPositionChanged.connect(
+                lambda source=pane: self._cursor_conflict_changed(source))
         self.result.edited.connect(self._update_status)
         self.result.edited.connect(self._syntax_timer.start)
         self._update_status()
@@ -390,12 +402,70 @@ class MergeView(QWidget):
                 operation = self.result.editor.undo
             elif event.matches(QKeySequence.StandardKey.Redo):
                 operation = self.result.editor.redo
+            elif (event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+                  and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
+                # Same difference navigation keys as the Files tab.
+                operation = lambda: self.navigate(-1 if event.key() == Qt.Key.Key_Up else 1)
             if operation is not None:
                 if event.type() == QEvent.Type.KeyPress:
                     operation()
                 event.accept()
                 return True
+        if (event.type() == QEvent.Type.Wheel
+                and (abs(event.pixelDelta().x()) > abs(event.pixelDelta().y())
+                     or abs(event.angleDelta().x()) > abs(event.angleDelta().y())
+                     or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))):
+            bar = self.horizontal_scrollbar
+            if not event.pixelDelta().isNull():
+                bar.setValue(bar.value() - (event.pixelDelta().x() or event.pixelDelta().y()))
+            else:
+                QApplication.sendEvent(bar, event)
+            event.accept()
+            return True
         return super().eventFilter(watched, event)
+
+    def _sync_horizontal(self, value: int):
+        if self._syncing_horizontal:
+            return
+        self._syncing_horizontal = True
+        try:
+            # Shorter documents clamp at their own right edge.
+            self.horizontal_scrollbar.setValue(value)
+            for pane in (self.sources[1], self.result, self.sources[2]):
+                pane.editor.horizontalScrollBar().setValue(value)
+        finally:
+            self._syncing_horizontal = False
+
+    def _update_horizontal_range(self, *_):
+        bars = tuple(pane.editor.horizontalScrollBar()
+                     for pane in (self.sources[1], self.result, self.sources[2]))
+        shared = self.horizontal_scrollbar
+        shared.setRange(0, max(bar.maximum() for bar in bars))
+        shared.setPageStep(min(bar.pageStep() for bar in bars))
+        shared.setSingleStep(bars[0].singleStep())
+        shared.setVisible(shared.maximum() > 0)
+        self._sync_horizontal(shared.value())
+
+    def _cursor_conflict_changed(self, pane: EditorWidget):
+        # Select the conflict under the cursor so Use Left/Right act on it.
+        # Moves outside any conflict keep the current selection.
+        if self._loading or self._busy or self._choice or self._navigating:
+            return
+        cursor = pane.editor.textCursor()
+        for index, conflict in enumerate(self._conflicts):
+            if pane is self.result:
+                inside = conflict.start <= cursor.position() <= conflict.end
+            else:
+                start, end = (conflict.record.left_range if pane is self.sources[1]
+                              else conflict.record.right_range)
+                inside = start <= cursor.blockNumber() < end
+            if inside:
+                if index != self._selected:
+                    self._selected = index
+                    self._navigated = True
+                    self._update_status()
+                    self._paint_conflicts()
+                return
 
     @property
     def paths(self):
@@ -453,7 +523,8 @@ class MergeView(QWidget):
                                     "Discard unsaved changes to the merge result?") == QMessageBox.StandardButton.Yes
 
     def open_paths(self, base: Path | None, left: Path, right: Path,
-                   output: Path | None = None, confirmed: bool = False):
+                   output: Path | None = None, confirmed: bool = False,
+                   encoding: str | None = None):
         paths = tuple(path.expanduser().absolute() if path is not None else None
                       for path in (base, left, right))
         if self._busy or (not confirmed and not self.confirm_discard()):
@@ -493,11 +564,11 @@ class MergeView(QWidget):
                 failed_path = output if i == 3 else paths[i]
                 QMessageBox.critical(self, "Open failed", f"{failed_path}: {message}")
 
-            self.scheduler.submit_file(("merge-read", serial, index), read_merge_file,
-                                       (path, None), done, failed)
+            self.scheduler.submit_file(("merge-read", serial, index), read_text_file,
+                                       (path, encoding), done, failed)
         if read_output:
-            self.scheduler.submit_file(("merge-read", serial, 3), read_merge_file,
-                                       (output, None), lambda loaded: done(loaded, 3),
+            self.scheduler.submit_file(("merge-read", serial, 3), read_text_file,
+                                       (output, encoding), lambda loaded: done(loaded, 3),
                                        lambda message: failed(message, 3))
 
     def _install_sources(self, paths, output, loaded, existing=None):
@@ -529,7 +600,15 @@ class MergeView(QWidget):
 
     def _submit_merge(self):
         self.scheduler.submit_merge(*(editor.text() for editor in self.sources),
-                                    tuple(editor.state.revision for editor in self.sources))
+                                    tuple(editor.state.revision for editor in self.sources),
+                                    self.compare_options)
+
+    def set_compare_options(self, options: CompareOptions):
+        self.compare_options = options
+        # Re-merging replaces the Result, so edited results wait for Recreate.
+        if self._paths is not None and not self._busy and not self.result.state.dirty:
+            self._busy = True
+            self._submit_merge()
 
     def accept_merge(self, merged: MergeResult):
         if merged.revisions != tuple(editor.state.revision for editor in self.sources):
@@ -574,6 +653,7 @@ class MergeView(QWidget):
             end = sum(len(line.encode("utf-16-le")) // 2 for line in lines[:record.result_range[1]])
             self._regions.append(_RegionState(record, start, end))
         self._selected = 0 if self._conflicts else -1
+        self._navigated = False
         self._busy = False
         self.left_gutter.set_regions()
         self.right_gutter.set_regions()
@@ -741,16 +821,33 @@ class MergeView(QWidget):
     def navigate(self, direction: int):
         if not self._conflicts:
             return
-        self._selected = (self._selected + direction) % len(self._conflicts)
+        # The first conflict is preselected on load; the first F7 shows it.
+        if self._navigated or direction < 0:
+            self._selected = (self._selected + direction) % len(self._conflicts)
+        self._navigated = True
         conflict = self._conflicts[self._selected]
-        for editor, line_range in zip(self.sources, (conflict.record.base_range,
-                                                      conflict.record.left_range,
-                                                      conflict.record.right_range)):
-            editor.select_hunk(*line_range)
-        cursor = QTextCursor(self.result.editor.document())
-        cursor.setPosition(conflict.start)
-        self.result.editor.setTextCursor(cursor)
-        self.result.editor.ensureCursorVisible()
+        self._navigating = True
+        try:
+            for editor, line_range in zip(self.sources, (conflict.record.base_range,
+                                                          conflict.record.left_range,
+                                                          conflict.record.right_range)):
+                editor.select_hunk(*line_range)
+            cursor = QTextCursor(self.result.editor.document())
+            cursor.setPosition(conflict.start)
+            self.result.editor.setTextCursor(cursor)
+        finally:
+            self._navigating = False
+        # Place the conflict a third of the way down, like the Files tab.
+        panes = (self.sources[1], self.result, self.sources[2])
+        start_row = min(pane.editor.visual_row(line) for pane, line in zip(
+            panes, (conflict.record.left_range[0], cursor.blockNumber(), conflict.record.right_range[0])))
+        row = max(0, start_row - self.result.editor.verticalScrollBar().pageStep() // 3)
+        self._syncing_scroll = True
+        try:
+            for pane in panes:
+                pane.editor.verticalScrollBar().setValue(pane.editor.block_for_visual_row(row))
+        finally:
+            self._syncing_scroll = False
         self._update_status()
         self._paint_conflicts()
 
@@ -888,12 +985,12 @@ class MergeView(QWidget):
         newline = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}.get(self.result.state.newline, "LF")
         self.result_title.setText(
             f"Result · {path.name if path else 'Untitled'}{dirty} · "
-            f"{self.result.state.encoding.upper()} {newline}"
+            f"{encoding_label(self.result.state.encoding)} {newline}"
             f"{' BOM' if self.result.state.bom else ''}"
         )
         self.result_title.setToolTip(str(path) if path else "Result has not been saved")
         self.encoding_button.setText(
-            f"Encoding: {self.result.state.encoding.upper()}"
+            f"Encoding: {encoding_label(self.result.state.encoding)}"
             f"{' BOM' if self.result.state.bom else ''}"
         )
         self.encoding_button.setToolTip(
@@ -915,9 +1012,11 @@ class MergeView(QWidget):
         self.encoding_button.setEnabled(self._paths is not None and not self._busy)
         self.state_changed.emit()
 
-    def _set_encoding(self, encoding: str):
-        self.result.state.encoding = encoding
-        self._update_status()
+    def _set_encoding(self, encoding: str | None):
+        # Re-decode the sources like the Files tab; the Result is saved with it.
+        if self._paths is None or self._busy or not self.confirm_discard():
+            return
+        self.open_paths(*self._paths, self.result.state.path, confirmed=True, encoding=encoding)
 
     def reload_sources(self):
         if self._paths is None or self._busy or not self.confirm_discard():

@@ -39,18 +39,12 @@ from diffly.gui.theme import (
     save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
-from diffly.services.file_service import file_stamp, read_file, write_file
+from diffly.services.file_service import ENCODINGS, encoding_label, file_stamp, read_text_file, write_file
 from diffly.services.directory_service import (
     copy_directory_checked, copy_file_checked, directory_stamp, path_stamp, regular_file_stamp,
 )
 from diffly.services.task_scheduler import TaskScheduler
 from diffly.services.session_store import load_sessions, remember, save_sessions
-
-
-ENCODINGS = (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
-             ("UTF-16 BE", "utf-16-be"), ("Windows-1251", "cp1251"),
-             ("Windows-1252", "cp1252"), ("ISO-8859-1", "iso8859-1"),
-             ("Windows-1250", "cp1250"), ("Shift JIS", "shift_jis"))
 
 
 def _suppress_dialogs():
@@ -216,12 +210,14 @@ class MainWindow(QMainWindow):
         )
         self.merge_find_panel = FindPanel(self, self.merge_view)
         self.merge_find_panel.set_target(self.merge_view.result)
-        self.merge_view.layout().insertWidget(1, self.merge_find_panel)
+        self.merge_view.layout().addWidget(self.merge_find_panel)
+        self.merge_view.compare_options = self.compare_options
         if merge_enabled:
             self.tabs.addTab(self.merge_view, "Merge")
         else:
             self.merge_view.hide()
         self.merge_view.paths_changed.connect(self._remember_merge)
+        self.merge_view.paths_changed.connect(self._refresh_merge_title)
         self.merge_view.status_changed.connect(self.statusBar().showMessage)
         self.statusBar().addPermanentWidget(self.merge_view.footer)
         self.statusBar().addPermanentWidget(self.merge_view.encoding_button)
@@ -332,15 +328,16 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         self.merge_actions = []
         for label, shortcut, callback in (
-            ("Previous conflict", "Shift+F7", lambda: self.merge_view.navigate(-1)),
-            ("Next conflict", "F7", lambda: self.merge_view.navigate(1)),
+            ("Previous conflict", ("Ctrl+Alt+Up", "Shift+F7"), lambda: self.merge_view.navigate(-1)),
+            ("Next conflict", ("Ctrl+Alt+Down", "F7"), lambda: self.merge_view.navigate(1)),
             ("Use Left", "Ctrl+Alt+1", lambda: self.merge_view.use("left")),
             ("Use Right", "Ctrl+Alt+2", lambda: self.merge_view.use("right")),
             ("Use Base", "Ctrl+Alt+3", lambda: self.merge_view.use("base")),
             ("Mark Resolved", "Ctrl+Alt+0", self.merge_view.mark_resolved),
         ):
             action = QAction(label, self)
-            action.setShortcut(QKeySequence(shortcut))
+            action.setShortcuts([QKeySequence(key) for key in (
+                shortcut if isinstance(shortcut, tuple) else (shortcut,))])
             action.triggered.connect(callback)
             edit_menu.addAction(action)
             self.merge_actions.append(action)
@@ -410,6 +407,7 @@ class MainWindow(QMainWindow):
     def _set_comparison_options(self, options: CompareOptions):
         self.compare_options = options
         self._documents_changed(self.left)
+        self.merge_view.set_compare_options(options)
         values = {key: getattr(options, key) for key in
                   ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}
         self.config.settings.update(values)
@@ -626,15 +624,28 @@ class MainWindow(QMainWindow):
             self._merge_toolbar_icons[action] = kind
             return action
 
+        def spacer():
+            widget = QWidget(toolbar)
+            widget.setFixedWidth(12)
+            toolbar.addWidget(widget)
+
+        modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
+        self.merge_refresh_action = add("Refresh", "refresh", self.merge_view.reload_sources,
+                                        "Reload merge sources from disk and merge again")
+        spacer()
         self.merge_previous_action = add("Previous conflict", "up", lambda: self.merge_view.navigate(-1),
-                                         "Previous conflict (Shift+F7)")
+                                         f"Previous conflict ({modifier}+Up)")
         self.merge_next_action = add("Next conflict", "down", lambda: self.merge_view.navigate(1),
-                                     "Next conflict (F7)")
-        toolbar.addSeparator()
+                                     f"Next conflict ({modifier}+Down)")
+        spacer()
         self.merge_use_left_action = add("Use Left", "apply_right", lambda: self.merge_view.use("left"),
-                                         "Use Left for selected conflict (Ctrl+Alt+1)")
+                                         f"Use Left for selected conflict ({modifier}+1)")
         self.merge_use_right_action = add("Use Right", "apply_left", lambda: self.merge_view.use("right"),
-                                          "Use Right for selected conflict (Ctrl+Alt+2)")
+                                          f"Use Right for selected conflict ({modifier}+2)")
+        self.merge_use_base_action = add("Use Base", "base", lambda: self.merge_view.use("base"),
+                                         f"Use Base for selected conflict ({modifier}+3)")
+        self.merge_resolved_action = add("Mark Resolved", "check", self.merge_view.mark_resolved,
+                                         f"Mark edited conflict as resolved ({modifier}+0)")
         self.merge_toolbar = toolbar
         toolbar.hide()
         self._refresh_merge_toolbar()
@@ -656,7 +667,10 @@ class MainWindow(QMainWindow):
             return
         view = self.merge_view
         for action, key in ((self.merge_previous_action, "Previous conflict"),
-                            (self.merge_next_action, "Next conflict")):
+                            (self.merge_next_action, "Next conflict"),
+                            (self.merge_refresh_action, "Reload Sources"),
+                            (self.merge_use_base_action, "Use Base"),
+                            (self.merge_resolved_action, "Mark Resolved")):
             action.setEnabled(view.buttons[key].isEnabled())
         selected = view._selected >= 0 and not view.busy
         self.merge_use_left_action.setEnabled(selected)
@@ -929,7 +943,7 @@ class MainWindow(QMainWindow):
         elif directories_active:
             self.setWindowTitle("Directories — Diffly")
         elif merge_active:
-            self.setWindowTitle("Merge — Diffly")
+            self._refresh_merge_title()
         else:
             self.setWindowTitle("Settings — Diffly")
         if self._native_toolbar_bridge is not None:
@@ -1079,10 +1093,13 @@ class MainWindow(QMainWindow):
             self.toolbar.hide()
             if self.merge_enabled:
                 merge_actions = {
+                    "diffly.merge.refresh": (self.merge_refresh_action, "refresh"),
                     "diffly.merge.previous": (self.merge_previous_action, "up"),
                     "diffly.merge.next": (self.merge_next_action, "down"),
                     "diffly.merge.left": (self.merge_use_left_action, "apply_right"),
                     "diffly.merge.right": (self.merge_use_right_action, "apply_left"),
+                    "diffly.merge.base": (self.merge_use_base_action, "base"),
+                    "diffly.merge.resolved": (self.merge_resolved_action, "check"),
                 }
                 self._merge_native_toolbar_bridge = install_inline_toolbar(
                     self, merge_actions, "com.diffly.merge.toolbar"
@@ -1123,12 +1140,18 @@ class MainWindow(QMainWindow):
             right = self.right.state.path.name if self.right.state.path else "Untitled"
             self.setWindowTitle(f"{left} ↔ {right} — Diffly" if self.left.state.path or self.right.state.path else "Diffly")
 
+    def _refresh_merge_title(self):
+        if self.tabs.currentWidget() is not self.merge_view:
+            return
+        paths = self.merge_view.paths
+        self.setWindowTitle(f"{paths[1].name} ↔ {paths[2].name} — Diffly" if paths else "Merge — Diffly")
+
     def _active_pane(self) -> EditorWidget:
         return self.left if self._last_active_side == "left" else self.right
 
     def _refresh_encoding_label(self):
         state = self._active_pane().state
-        label = next((name for name, value in ENCODINGS if value == state.encoding), state.encoding.upper())
+        label = encoding_label(state.encoding)
         if state.bom:
             label += " BOM"
         self.encoding_label.setText(f"Encoding: {label}")
@@ -1520,7 +1543,7 @@ class MainWindow(QMainWindow):
             self._refresh_toolbar()
             QMessageBox.critical(self, "Open failed", message)
 
-        self.scheduler.submit_file(key, read_file, (path, encoding), done, failed)
+        self.scheduler.submit_file(key, read_text_file, (path, encoding), done, failed)
 
     def _save_active(self, save_as: bool = False):
         if self.tabs.currentWidget() is self.file_comparison:
