@@ -9,33 +9,33 @@ from diffly.gui.main_window import MainWindow
 def test_json_and_python_highlighting_arrive_from_background(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     window = MainWindow()
-    window.tabs.setCurrentWidget(window.file_comparison)
+    window.tabs.setCurrentWidget(window.files)
     qtbot.addWidget(window)
-    window.left.state.path = Path("sample.json")
-    window.right.state.path = Path("sample.py")
-    window.left.load_text('{"name": "Diffly", "count": 2}\n')
-    window.right.load_text('def greet():\n    return "hello" # note\n')
-    qtbot.waitUntil(lambda: bool(window.left.highlighter._spans) and bool(window.right.highlighter._spans), timeout=5000)
-    assert (1, 7, "key") in window.left.highlighter._spans[0]
-    assert any(kind == "number" for _, _, kind in window.left.highlighter._spans[0])
-    assert (0, 3, "keyword") in window.right.highlighter._spans[0]
-    assert any(kind == "comment" for _, _, kind in window.right.highlighter._spans[1])
-    assert window.left.editor.document().firstBlock().layout().formats()
-    assert window.right.editor.document().firstBlock().layout().formats()
+    window.files.left.state.path = Path("sample.json")
+    window.files.right.state.path = Path("sample.py")
+    window.files.left.load_text('{"name": "Diffly", "count": 2}\n')
+    window.files.right.load_text('def greet():\n    return "hello" # note\n')
+    qtbot.waitUntil(lambda: bool(window.files.left.highlighter._spans) and bool(window.files.right.highlighter._spans), timeout=5000)
+    assert (1, 7, "key") in window.files.left.highlighter._spans[0]
+    assert any(kind == "number" for _, _, kind in window.files.left.highlighter._spans[0])
+    assert (0, 3, "keyword") in window.files.right.highlighter._spans[0]
+    assert any(kind == "comment" for _, _, kind in window.files.right.highlighter._spans[1])
+    assert window.files.left.editor.document().firstBlock().layout().formats()
+    assert window.files.right.editor.document().firstBlock().layout().formats()
     window.close()
 
 
 def test_stale_syntax_result_is_ignored(qtbot):
     window = MainWindow()
-    window.tabs.setCurrentWidget(window.file_comparison)
+    window.tabs.setCurrentWidget(window.files)
     qtbot.addWidget(window)
-    window.left.state.path = Path("a.json")
-    window.left.load_text('{"a": 1}')
-    stale_revision = window.left.state.revision
-    window.left.editor.insertPlainText('new')
-    window.syntax.accept(("files-0", stale_revision, "json", ((0, 0, 5, "key"),)))
-    assert not window.left.highlighter._spans
-    window.left.state.saved_revision = window.left.state.revision
+    window.files.left.state.path = Path("a.json")
+    window.files.left.load_text('{"a": 1}')
+    stale_revision = window.files.left.state.revision
+    window.files.left.editor.insertPlainText('new')
+    window.files.syntax.accept(("files-0", stale_revision, "json", ((0, 0, 5, "key"),)))
+    assert not window.files.left.highlighter._spans
+    window.files.left.state.saved_revision = window.files.left.state.revision
     window.close()
 
 

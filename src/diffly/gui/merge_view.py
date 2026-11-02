@@ -203,8 +203,8 @@ class MergeView(QWidget):
         self._git_saved = False
         self.line_numbers_visible = line_numbers_visible
         self.syntax_highlighting_enabled = syntax_highlighting_enabled
-        self.sources = tuple(EditorWidget(self) for _ in range(3))
-        self.result = EditorWidget(self)
+        self.sources = tuple(EditorWidget(self, name) for name in ("Base", "Left", "Right"))
+        self.result = EditorWidget(self, "Result")
         self._paths: tuple[Path, Path, Path] | None = None
         self._conflicts: list[_ConflictState] = []
         self._regions: list[_RegionState] = []

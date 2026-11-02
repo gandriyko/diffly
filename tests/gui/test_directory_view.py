@@ -42,11 +42,11 @@ def test_directory_tab_scans_in_background_and_opens_file_pair(qtbot, tmp_path, 
     item = view.left_tree.topLevelItem(0)
     assert item.background(0).color() == QColor(window.config.themes[window._active_theme_name]["diff_replace"])
     view.left_tree.itemDoubleClicked.emit(item, 0)
-    qtbot.waitUntil(lambda: window.left.state.path == left / "changed.txt"
-                    and window.right.state.path == right / "changed.txt", timeout=5000)
-    assert window.tabs.currentWidget() is window.file_comparison
-    assert window.left.text() == "left"
-    assert window.right.text() == "rght"
+    qtbot.waitUntil(lambda: window.files.left.state.path == left / "changed.txt"
+                    and window.files.right.state.path == right / "changed.txt", timeout=5000)
+    assert window.tabs.currentWidget() is window.files
+    assert window.files.left.text() == "left"
+    assert window.files.right.text() == "rght"
     window.close()
 
 

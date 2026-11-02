@@ -52,6 +52,8 @@ diffly/
 │       ├── app.py
 │       ├── gui/
 │       │   ├── main_window.py
+│       │   ├── file_comparison.py
+│       │   ├── merge_view.py
 │       │   ├── editor_widget.py
 │       │   ├── diff_gutter.py
 │       │   └── syntax_highlighter.py

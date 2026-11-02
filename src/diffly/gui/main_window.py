@@ -9,38 +9,29 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QInputDialog,
-    QScrollBar,
     QTabWidget,
     QToolBar,
-    QVBoxLayout,
     QWidget,
 )
 
-from diffly.core.diff.engine import CompareOptions, DiffResult, compare, delete_hunk_text, transfer_text
+from diffly.core.diff.engine import CompareOptions
 from diffly.core.directories.filters import DEFAULT_PRESETS, PRESETS
-from diffly.gui.diff_gutter import DiffGutter
-from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.directory_comparison import DirectoryComparisonView
-from diffly.gui.editor_widget import EditorWidget, encoding_button
+from diffly.gui.file_comparison import FileComparisonView
 from diffly.gui.find_panel import FindPanel
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.settings_page import SettingsPage
 from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.merge_view import MergeView
-from diffly.gui.scroll_sync import HorizontalScrollSync, follow_scroll, scroll_to_row
-from diffly.gui.seamless_splitter import SeamlessSplitter
-from diffly.gui.syntax_controller import SyntaxController
 from diffly.gui.theme import (
     apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
     save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
-from diffly.services.file_service import file_stamp, read_text_file, status_encoding_text, write_file
 from diffly.services.directory_service import (
     copy_directory_checked, copy_file_checked, directory_stamp, path_stamp, regular_file_stamp,
 )
@@ -111,8 +102,6 @@ class MainWindow(QMainWindow):
             self._linux_titlebar = LinuxTitleBar(self)
             self.setMenuWidget(self._linux_titlebar)
         self.scheduler = TaskScheduler(self)
-        self.scheduler.diff_ready.connect(self._accept_diff)
-        self.scheduler.diff_failed.connect(self._diff_error)
         self.scheduler.merge_ready.connect(self._accept_merge)
         self.scheduler.merge_failed.connect(self._merge_error)
         self.config = load_config()
@@ -128,29 +117,10 @@ class MainWindow(QMainWindow):
             ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")
         })
         self.toolbar = None
-        self.left = EditorWidget()
-        self.right = EditorWidget()
         self.syntax_highlighting_enabled = bool(self.config.settings.get("syntax_highlighting", True))
-        for editor in (self.left, self.right):
-            editor.editor.set_line_numbers_visible(bool(
-                self.config.settings.get("show_line_numbers", False)))
-        self.left.editor.installEventFilter(self)
-        self.right.editor.installEventFilter(self)
-        self.left.editor.viewport().installEventFilter(self)
-        self.right.editor.viewport().installEventFilter(self)
-        for editor in (self.left, self.right):
-            editor.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            editor.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._last_active_side = "left"
-        self.left.edited.connect(lambda: self._documents_changed(self.left))
-        self.right.edited.connect(lambda: self._documents_changed(self.right))
-        self._diff: DiffResult | None = None
-        self._selected_hunk = -1
-        self._updating_hunk_selection = False
-        self._busy_files: set[int] = set()
+        line_numbers_visible = bool(self.config.settings.get("show_line_numbers", False))
         self._directory_copy_busy = False
         self._skip_copy_confirmation = False
-        self._serial = 0
         self._native_toolbar_attempts = 0
         self._native_toolbar_bridge = None
         self._merge_native_toolbar_bridge = None
@@ -158,55 +128,14 @@ class MainWindow(QMainWindow):
         self._append_mode = False
         QApplication.instance().installEventFilter(_ShiftWatcher(self._set_append_mode, self))
 
-        self.left_title = QLabel()
-        self.right_title = QLabel()
-        self.left_title.setObjectName("PaneTitle")
-        self.right_title.setObjectName("PaneTitle")
-        root = QWidget()
-        root.setObjectName("DifflyRoot")
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(0)
-        self.shared_scrollbar = QScrollBar(Qt.Orientation.Vertical, root)
-        self.shared_scrollbar.hide()
-        self.gutter = DiffGutter(self.left.editor, self.right.editor, self.shared_scrollbar, root)
-        self.gutter.transfer_requested.connect(self._transfer)
-        self.overview = DiffOverview(self.left.editor, self.right.editor, self.shared_scrollbar, root)
-        # Same resizable pane layout as the Merge and Directories tabs.
-        panes = []
-        for title, editor, extra in ((self.left_title, self.left, None),
-                                     (self.right_title, self.right, self.overview)):
-            panel = QWidget(root)
-            panel.setMinimumWidth(150)
-            column = QVBoxLayout(panel)
-            column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(0)
-            column.addWidget(title)
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(0)
-            row.addWidget(editor, 1)
-            if extra is not None:
-                row.addWidget(extra)
-            column.addLayout(row, 1)
-            panes.append(panel)
-        splitter = SeamlessSplitter(Qt.Orientation.Horizontal, root)
-        splitter.setHandleWidth(0)
-        splitter.addWidget(panes[0])
-        splitter.addWidget(self.gutter)
-        splitter.addWidget(panes[1])
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        splitter.setStretchFactor(2, 1)
-        splitter.setCollapsible(1, False)
-        splitter.setSizes([450, self.gutter.width(), 450])
-        layout.addWidget(splitter, 1)
-        self.shared_horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, root)
-        self.shared_horizontal_scrollbar.installEventFilter(self)
-        layout.addWidget(self.shared_horizontal_scrollbar)
-        self.find_panel = FindPanel(self, root)
-        layout.addWidget(self.find_panel)
-        self.file_comparison = root
+        self.files = FileComparisonView(
+            self.scheduler, self.compare_options, self,
+            line_numbers_visible=line_numbers_visible,
+            syntax_highlighting_enabled=self.syntax_highlighting_enabled,
+        )
+        self.files.state_changed.connect(self._refresh_toolbar)
+        self.files.status_changed.connect(self.statusBar().showMessage)
+        self.files.paths_changed.connect(self._files_paths_changed)
         self.directory_comparison = DirectoryComparisonView(
             self.scheduler, list(self.config.settings.get("ignore_patterns", [])), self,
             bool(self.config.settings.get("use_gitignore", True)),
@@ -222,14 +151,14 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("ComparisonTabs")
         self.tabs.addTab(self.directory_comparison, "Directories")
-        self.tabs.addTab(root, "Files")
+        self.tabs.addTab(self.files, "Files")
         self.merge_view = MergeView(
             self.scheduler, self,
-            line_numbers_visible=bool(self.config.settings.get("show_line_numbers", False)),
+            line_numbers_visible=line_numbers_visible,
             syntax_highlighting_enabled=self.syntax_highlighting_enabled,
             git_mergetool=git_mergetool,
         )
-        self.merge_find_panel = FindPanel(self, self.merge_view)
+        self.merge_find_panel = FindPanel(self.merge_view)
         self.merge_find_panel.set_target(self.merge_view.result)
         self.merge_view.layout().addWidget(self.merge_find_panel)
         self.merge_view.compare_options = self.compare_options
@@ -253,14 +182,6 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
 
-        self._syncing_scroll = False
-        self.left.editor.verticalScrollBar().valueChanged.connect(lambda value: self._sync_scroll(self.left, self.right, value))
-        self.right.editor.verticalScrollBar().valueChanged.connect(lambda value: self._sync_scroll(self.right, self.left, value))
-        for editor in (self.left, self.right):
-            editor.editor.verticalScrollBar().rangeChanged.connect(self._update_shared_scroll_range)
-        self.shared_scrollbar.valueChanged.connect(self._scroll_both)
-        self._update_shared_scroll_range()
-        self.horizontal_sync = HorizontalScrollSync((self.left, self.right), self.shared_horizontal_scrollbar)
         self._make_menu()
         self._make_toolbar()
         self._make_merge_toolbar()
@@ -270,24 +191,12 @@ class MainWindow(QMainWindow):
         self._recent_timer.setSingleShot(True)
         self._recent_timer.setInterval(700)
         self._recent_timer.timeout.connect(self._remember_files)
-        self.debounce = QTimer(self)
-        self.debounce.setSingleShot(True)
-        self.debounce.setInterval(300)
-        self.debounce.timeout.connect(self._request_diff)
-        self.syntax = SyntaxController(self.scheduler, "files", (self.left, self.right),
-                                       self.syntax_highlighting_enabled, self)
-        self.summary_label = QLabel()
         self.directory_summary_label = QLabel()
-        self.encoding_label = encoding_button(self, self._choose_encoding)
-        self.encoding_label.setToolTip("Encoding of the active pane")
-        self.statusBar().addPermanentWidget(self.summary_label)
+        self.statusBar().addPermanentWidget(self.files.footer)
         self.statusBar().addPermanentWidget(self.directory_summary_label)
-        self.statusBar().addPermanentWidget(self.encoding_label)
+        self.statusBar().addPermanentWidget(self.files.encoding_button)
         self._apply_theme(self.config.settings.get("theme", "gruvbox"))
-        self._refresh_titles()
         self._refresh_toolbar()
-        self.left.editor.cursorPositionChanged.connect(lambda: self._cursor_hunk_changed(self.left))
-        self.right.editor.cursorPositionChanged.connect(lambda: self._cursor_hunk_changed(self.right))
         self.statusBar().showMessage("Open a file in each pane to compare")
         self._tab_changed(self.tabs.currentIndex())
 
@@ -296,8 +205,8 @@ class MainWindow(QMainWindow):
         file_menu = menu_bar.addMenu("File")
         self.file_actions = {}
         for label, shortcut, callback in (
-            ("Open Left…", "Ctrl+O", lambda: self._open(self.left)),
-            ("Open Right…", "Ctrl+Shift+O", lambda: self._open(self.right)),
+            ("Open Left…", "Ctrl+O", lambda: self.files.open_dialog(self.files.left)),
+            ("Open Right…", "Ctrl+Shift+O", lambda: self.files.open_dialog(self.files.right)),
             ("Save", "Ctrl+S", self._save_active),
             ("Save As…", None, lambda: self._save_active(True)),
         ):
@@ -360,11 +269,11 @@ class MainWindow(QMainWindow):
         for label, shortcut, callback in (
             ("Next Difference", "Ctrl+Alt+Down", lambda: self._navigate(1)),
             ("Previous Difference", "Ctrl+Alt+Up", lambda: self._navigate(-1)),
-            ("Apply Right to Left", "Ctrl+Alt+Left", lambda: self._transfer(self._selected_hunk, False)),
-            ("Apply Left to Right", "Ctrl+Alt+Right", lambda: self._transfer(self._selected_hunk, True)),
-            ("Append Right Below Left", "Ctrl+Alt+Shift+Left", lambda: self._transfer(self._selected_hunk, False, True)),
-            ("Append Left Below Right", "Ctrl+Alt+Shift+Right", lambda: self._transfer(self._selected_hunk, True, True)),
-            ("Delete Selected Block", "Ctrl+Alt+Delete", lambda: self._delete_selected(self._selected_hunk)),
+            ("Apply Right to Left", "Ctrl+Alt+Left", lambda: self._transfer(False)),
+            ("Apply Left to Right", "Ctrl+Alt+Right", lambda: self._transfer(True)),
+            ("Append Right Below Left", "Ctrl+Alt+Shift+Left", lambda: self._transfer(False, True)),
+            ("Append Left Below Right", "Ctrl+Alt+Shift+Right", lambda: self._transfer(True, True)),
+            ("Delete Selected Block", "Ctrl+Alt+Delete", lambda: self._delete_selected()),
         ):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(shortcut))
@@ -399,15 +308,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No matches in current editor")
 
     def _active_find_target(self):
-        if self.tabs.currentWidget() is self.file_comparison:
-            return self.find_panel, self._active_pane()
+        if self.tabs.currentWidget() is self.files:
+            return self.files.find_panel, self.files.active_pane()
         if self.tabs.currentWidget() is self.merge_view:
             return self.merge_find_panel, self.merge_view.result
         return None, None
 
     def _set_comparison_options(self, options: CompareOptions):
         self.compare_options = options
-        self._documents_changed(self.left)
+        self.files.set_compare_options(options)
         self.merge_view.set_compare_options(options)
         values = {key: getattr(options, key) for key in
                   ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}
@@ -435,8 +344,8 @@ class MainWindow(QMainWindow):
             right = self.directory_comparison.right_path.text().strip()
             kind = "directories"
         else:
-            left = str(self.left.state.path or "")
-            right = str(self.right.state.path or "")
+            left = str(self.files.left.state.path or "")
+            right = str(self.files.right.state.path or "")
             kind = "files"
         if not left or not right:
             return None
@@ -504,11 +413,17 @@ class MainWindow(QMainWindow):
         self.sessions["recent"] = []
         self._persist_sessions()
 
+    def _files_paths_changed(self):
+        self._recent_timer.start()
+        if self.tabs.currentWidget() is self.files:
+            self.setWindowTitle(self.files.window_title())
+
     def _remember_files(self):
-        if self._busy_files or self.left.state.path is None or self.right.state.path is None:
+        left, right = self.files.left.state.path, self.files.right.state.path
+        if self.files.busy or left is None or right is None:
             return
-        entry = {"kind": "files", "left": str(self.left.state.path.absolute()),
-                 "right": str(self.right.state.path.absolute()),
+        entry = {"kind": "files", "left": str(left.absolute()),
+                 "right": str(right.absolute()),
                  "options": {key: getattr(self.compare_options, key) for key in
                              ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")}}
         remember(self.sessions, entry)
@@ -527,7 +442,7 @@ class MainWindow(QMainWindow):
             self._persist_sessions()
 
     def _open_comparison(self, entry: dict):
-        if self._busy_files or self._directory_copy_busy:
+        if self.files.busy or self._directory_copy_busy:
             return
         paths = ((Path(entry["base"]), Path(entry["left"]), Path(entry["right"]))
                  if entry["kind"] == "merge" else (Path(entry["left"]), Path(entry["right"])))
@@ -540,17 +455,18 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.merge_view)
             self.merge_view.open_paths(*paths, Path(entry["result"]) if entry.get("result") else None)
         elif entry["kind"] == "files":
-            if not all(self._confirm_discard(editor) for editor in (self.left, self.right)):
+            if not self.files.confirm_replace():
                 return
-            self.tabs.setCurrentWidget(self.file_comparison)
+            self.tabs.setCurrentWidget(self.files)
             options = entry.get("options", {})
             self.compare_options = CompareOptions(**{
                 key: bool(options.get(key, False)) for key in
                 ("ignore_whitespace", "ignore_trailing_whitespace", "ignore_case")
             })
             self.settings_page.set_comparison_options(self.compare_options)
-            self.open_path(self.left, paths[0])
-            self.open_path(self.right, paths[1])
+            self.files.set_compare_options(self.compare_options)
+            self.files.open_path(self.files.left, paths[0])
+            self.files.open_path(self.files.right, paths[1])
         else:
             self.tabs.setCurrentWidget(self.directory_comparison)
             self.directory_comparison.left_path.setText(str(paths[0]))
@@ -598,16 +514,16 @@ class MainWindow(QMainWindow):
         self.previous_action = add("Previous", "up", f"Previous difference ({modifier}+Up)", lambda: self._navigate(-1))
         self.next_action = add("Next", "down", f"Next difference ({modifier}+Down)", lambda: self._navigate(1))
         self._toolbar_spacer(toolbar)
-        self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(self._selected_hunk, False, _shift_held()))
-        self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(self._selected_hunk, True, _shift_held()))
+        self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(False, _shift_held()))
+        self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(True, _shift_held()))
         self._toolbar_spacer(toolbar)
         self.paste_action = add("Paste", "paste", "Paste clipboard into the active editor", self._paste_current)
         # Keep side-specific delete actions available to callers without
         # showing destructive controls in the compact toolbar.
         self.delete_left_action = QAction("Delete L", self)
-        self.delete_left_action.triggered.connect(lambda: self._delete_selected(self._selected_hunk, True))
+        self.delete_left_action.triggered.connect(lambda: self._delete_selected(True))
         self.delete_right_action = QAction("Delete R", self)
-        self.delete_right_action.triggered.connect(lambda: self._delete_selected(self._selected_hunk, False))
+        self.delete_right_action.triggered.connect(lambda: self._delete_selected(False))
         self.toolbar = toolbar
         toolbar.installEventFilter(self)
 
@@ -672,7 +588,7 @@ class MainWindow(QMainWindow):
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
             return
-        files_active = self.tabs.currentWidget() is self.file_comparison
+        files_active = self.tabs.currentWidget() is self.files
         if not files_active:
             view = self.directory_comparison
             active = not self._directory_copy_busy
@@ -698,10 +614,11 @@ class MainWindow(QMainWindow):
             if self._native_toolbar_bridge is not None:
                 self._native_toolbar_bridge.sync()
             return
-        has_hunks = files_active and self._diff is not None and bool(self._diff.hunks)
-        self.refresh_action.setEnabled(not self._busy_files)
+        diff = self.files.diff
+        has_hunks = diff is not None and bool(diff.hunks)
+        self.refresh_action.setEnabled(not self.files.busy)
         self.refresh_action.setToolTip("Reload open files from disk and compare")
-        selected = has_hunks and 0 <= self._selected_hunk < len(self._diff.hunks)
+        selected = has_hunks and 0 <= self.files.selected_hunk < len(diff.hunks)
         self.previous_action.setEnabled(has_hunks)
         self.next_action.setEnabled(has_hunks)
         self.paste_action.setEnabled(files_active)
@@ -722,7 +639,7 @@ class MainWindow(QMainWindow):
             self._native_toolbar_bridge.sync()
 
     def _sync_comparison_actions(self):
-        files_active = self.tabs.currentWidget() is self.file_comparison
+        files_active = self.tabs.currentWidget() is self.files
         directories_active = self.tabs.currentWidget() is self.directory_comparison
         for label, source in (
             ("Next Difference", self.next_action),
@@ -739,7 +656,7 @@ class MainWindow(QMainWindow):
     def _set_append_mode(self, on: bool):
         if on != self._append_mode:
             self._append_mode = on
-            self.gutter.set_append(on)
+            self.files.set_append(on)
             self._refresh_toolbar()
 
     def _set_transfer_icons(self, append: bool):
@@ -763,7 +680,6 @@ class MainWindow(QMainWindow):
         apply_theme(QApplication.instance(), theme)
         self.settings_page.set_choice_theme(theme)
         self.settings_page.align_control_heights()
-        self._refresh_stats()
         self._refresh_directory_stats()
         for action, kind in self._toolbar_icons.items():
             action.setIcon(toolbar_icon(kind, theme["text"]))
@@ -772,18 +688,11 @@ class MainWindow(QMainWindow):
         font = editor_font(self.config.settings)
         tab_width = max(1, int(self.config.settings.get("tab_width", 4)))
         indent_guide_width = max(1, int(self.config.settings.get("indent_guide_width", 4)))
-        for editor in (self.left, self.right):
-            editor.set_font(font, tab_width, indent_guide_width)
-            editor.set_theme(theme)
+        self.files.set_appearance(theme, font, tab_width, indent_guide_width)
         self.merge_view.set_appearance(theme, font, tab_width, indent_guide_width)
-        self.overview.set_theme(theme)
-        self.gutter.set_theme(theme)
         self.directory_comparison.set_theme(theme)
         if self._native_toolbar_bridge is not None:
             self._native_toolbar_bridge.set_theme(theme)
-        if self._diff is not None:
-            self.left.show_hunks(self._diff.hunks, True, self._diff.left_spans)
-            self.right.show_hunks(self._diff.hunks, False, self._diff.right_spans)
 
     def _choose_theme(self, name: str):
         self._apply_theme(name)
@@ -796,12 +705,9 @@ class MainWindow(QMainWindow):
     def _set_editor_display_options(self, line_numbers: bool, syntax_highlighting: bool):
         self.merge_view.set_line_numbers_visible(line_numbers)
         self.merge_view.set_syntax_highlighting_enabled(syntax_highlighting)
-        for editor in (self.left, self.right):
-            editor.editor.set_line_numbers_visible(line_numbers)
+        self.files.set_line_numbers_visible(line_numbers)
+        self.files.set_syntax_highlighting_enabled(syntax_highlighting)
         self.syntax_highlighting_enabled = syntax_highlighting
-        self.syntax.set_enabled(syntax_highlighting)
-        self.horizontal_sync.update_range()
-        self.gutter.update()
         self.config.settings["show_line_numbers"] = line_numbers
         self.config.settings["syntax_highlighting"] = syntax_highlighting
         try:
@@ -829,33 +735,21 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Directory filters applied but not saved: {exc}")
 
     def _open_directory_files(self, left: Path, right: Path):
-        if any(id(editor) in self._busy_files for editor in (self.left, self.right)):
+        if not self.files.confirm_replace():
             return
-        if not all(self._confirm_discard(editor) for editor in (self.left, self.right)):
-            return
-        self.tabs.setCurrentWidget(self.file_comparison)
-        self.open_path(self.left, left)
-        self.open_path(self.right, right)
+        self.tabs.setCurrentWidget(self.files)
+        self.files.open_path(self.files.left, left)
+        self.files.open_path(self.files.right, right)
 
     def _refresh_current(self):
         if self.tabs.currentWidget() is self.directory_comparison:
             if not self._directory_copy_busy:
                 self.directory_comparison.compare()
             return
-        if self._busy_files:
-            return
-        loaded = [editor for editor in (self.left, self.right) if editor.state.path is not None]
-        if not all(self._confirm_discard(editor) for editor in loaded):
-            return
-        if not loaded:
-            self.debounce.stop()
-            self._request_diff()
-            return
-        for editor in loaded:
-            self.open_path(editor, editor.state.path)
+        self.files.reload()
 
     def _tab_changed(self, index: int):
-        files_active = self.tabs.widget(index) is self.file_comparison
+        files_active = self.tabs.widget(index) is self.files
         directories_active = self.tabs.widget(index) is self.directory_comparison
         merge_active = self.tabs.widget(index) is self.merge_view
         settings_active = self.tabs.widget(index) is self.settings_page
@@ -877,14 +771,14 @@ class MainWindow(QMainWindow):
         for label, action in self.comparison_actions.items():
             action.setText(directory_labels.get(label, label) if directories_active else label)
         if not files_active:
-            self.find_panel.hide()
+            self.files.find_panel.hide()
         if not merge_active:
             self.merge_find_panel.hide()
         for action in self.find_actions:
             action.setEnabled(files_active or merge_active)
         for action in self.merge_actions:
             action.setEnabled(merge_active)
-        for widget in (self.summary_label, self.encoding_label):
+        for widget in (self.files.footer, self.files.encoding_button):
             widget.setVisible(files_active)
         self.merge_view.footer.setVisible(merge_active)
         self.merge_view.encoding_button.setVisible(merge_active)
@@ -913,7 +807,7 @@ class MainWindow(QMainWindow):
             else:
                 self._native_toolbar_bridge.activate()
         if files_active:
-            self._refresh_titles()
+            self.setWindowTitle(self.files.window_title())
         elif directories_active:
             self.setWindowTitle("Directories — Diffly")
         elif merge_active:
@@ -934,85 +828,21 @@ class MainWindow(QMainWindow):
         self.config.settings["indent_guide_width"] = width
         self.settings_page.set_indent_width(width)
         font = editor_font(self.config.settings)
-        for editor in (self.left, self.right):
-            editor.set_font(font, width, width)
-        self.merge_view.set_appearance(self.config.themes[self._active_theme_name], font, width, width)
-        self.horizontal_sync.update_range()
+        theme = self.config.themes[self._active_theme_name]
+        self.files.set_appearance(theme, font, width, width)
+        self.merge_view.set_appearance(theme, font, width, width)
         try:
             save_indent_width(width)
         except OSError as exc:
             self.statusBar().showMessage(f"Tab width changed but not saved: {exc}")
 
-    def _sync_scroll(self, source: EditorWidget, target: EditorWidget, value: int):
-        if self._syncing_scroll:
-            return
-        self._syncing_scroll = True
-        try:
-            self.shared_scrollbar.setValue(follow_scroll(source, value, (target,)))
-        finally:
-            self._syncing_scroll = False
-
-    def _scroll_both(self, value: int):
-        if self._syncing_scroll:
-            return
-        self._syncing_scroll = True
-        try:
-            scroll_to_row((self.left, self.right), value)
-        finally:
-            self._syncing_scroll = False
-
-    def _update_shared_scroll_range(self, *_):
-        editors = (self.left.editor, self.right.editor)
-        bars = tuple(editor.verticalScrollBar() for editor in editors)
-        self.shared_scrollbar.setRange(0, max(
-            editor.visual_row(bar.maximum()) for editor, bar in zip(editors, bars)
-        ))
-        self.shared_scrollbar.setPageStep(max(bar.pageStep() for bar in bars))
-
     def eventFilter(self, watched, event):
-        if (watched in (self.left.editor, self.right.editor)
-                and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress)
-                and event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier
-                == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
-            append = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            commands = {
-                Qt.Key.Key_Up: lambda: self._navigate(-1),
-                Qt.Key.Key_Down: lambda: self._navigate(1),
-                Qt.Key.Key_Left: lambda: self._transfer(self._selected_hunk, False, append),
-                Qt.Key.Key_Right: lambda: self._transfer(self._selected_hunk, True, append),
-            }
-            command = commands.get(event.key())
-            if command is not None:
-                if event.type() == QEvent.Type.KeyPress:
-                    command()
-                event.accept()
-                return True
-        if (event.type() == QEvent.Type.Wheel
-                and watched in (self.left.editor.viewport(), self.right.editor.viewport(), self.shared_horizontal_scrollbar)):
-            on_bar = watched is self.shared_horizontal_scrollbar
-            if self.horizontal_sync.handle_wheel(event, on_bar):
-                return True
-            if on_bar:
-                return False
-            QApplication.sendEvent(self.shared_scrollbar, event)
-            return True
         if self.toolbar is not None and watched is self.toolbar and event.type() == QEvent.Type.MouseButtonDblClick:
             if self.isMaximized():
                 self.showNormal()
             else:
                 self.showMaximized()
             return True
-        if event.type() == QEvent.Type.FocusIn:
-            if watched is self.left.editor:
-                self._last_active_side = "left"
-                if self.find_panel.isVisible():
-                    self.find_panel.set_target(self.left)
-                self._refresh_encoding_label()
-            elif watched is self.right.editor:
-                self._last_active_side = "right"
-                if self.find_panel.isVisible():
-                    self.find_panel.set_target(self.right)
-                self._refresh_encoding_label()
         return super().eventFilter(watched, event)
 
     def showEvent(self, event):
@@ -1061,68 +891,17 @@ class MainWindow(QMainWindow):
     def focused_editor(self):
         if self.tabs.currentWidget() is self.merge_view:
             return self.merge_view.result.editor
-        if self.right.editor.hasFocus():
-            return self.right.editor
-        if self.left.editor.hasFocus():
-            return self.left.editor
-        return self.left.editor if self._last_active_side == "left" else self.right.editor
+        return self.files.focused_editor()
 
     def _paste_current(self):
-        if self.tabs.currentWidget() is not self.file_comparison:
-            return
-        editor = self.focused_editor()
-        editor.paste()
-        editor.setFocus(Qt.FocusReason.OtherFocusReason)
-
-    def _refresh_titles(self):
-        for editor, label, side in ((self.left, self.left_title, "Left"), (self.right, self.right_title, "Right")):
-            name = editor.state.path.name if editor.state.path else "Untitled"
-            label.setText(f"{side} · {name}{' •' if editor.state.dirty else ''}")
-            label.setToolTip(str(editor.state.path) if editor.state.path else "")
-        self._refresh_encoding_label()
-        if self.tabs.currentWidget() is self.file_comparison:
-            left = self.left.state.path.name if self.left.state.path else "Untitled"
-            right = self.right.state.path.name if self.right.state.path else "Untitled"
-            self.setWindowTitle(f"{left} ↔ {right} — Diffly" if self.left.state.path or self.right.state.path else "Diffly")
+        if self.tabs.currentWidget() is self.files:
+            self.files.paste()
 
     def _refresh_merge_title(self):
         if self.tabs.currentWidget() is not self.merge_view:
             return
         paths = self.merge_view.paths
         self.setWindowTitle(f"{paths[1].name} ↔ {paths[2].name} — Diffly" if paths else "Merge — Diffly")
-
-    def _active_pane(self) -> EditorWidget:
-        return self.left if self._last_active_side == "left" else self.right
-
-    def _refresh_encoding_label(self):
-        state = self._active_pane().state
-        self.encoding_label.setText(status_encoding_text(state.encoding, state.bom, state.newline))
-
-    def _choose_encoding(self, encoding: str | None):
-        editor = self._active_pane()
-        if id(editor) in self._busy_files:
-            return
-        if editor.state.path is None:
-            editor.state.encoding = encoding or "utf-8"
-            editor.state.bom = False
-            self._refresh_encoding_label()
-            return
-        if not self._confirm_discard(editor):
-            return
-        self.open_path(editor, editor.state.path, encoding)
-
-    def _refresh_stats(self):
-        if self._diff is None:
-            self.summary_label.setText("")
-            return
-        theme = self.config.themes[self._active_theme_name]
-        stats = self._diff.stats
-        self.summary_label.setText(
-            f'<span style="color:{theme["overview_removed"]}">●</span> {stats.deleted} deleted  '
-            f'<span style="color:{theme["overview_added"]}">●</span> {stats.added} added  '
-            f'<span style="color:{theme["overview_replace"]}">●</span> {stats.changed} changed  '
-            f'<span style="color:{theme["muted"]}">●</span> {stats.identical} identical'
-        )
 
     def _set_directory_stats(self, stats):
         self._directory_stats = stats
@@ -1148,135 +927,30 @@ class MainWindow(QMainWindow):
         if self.tabs.currentWidget() is self.directory_comparison:
             self.statusBar().showMessage(message)
 
-    def _documents_changed(self, editor: EditorWidget):
-        self._diff = None
-        self._selected_hunk = -1
-        self._refresh_toolbar()
-        # Keep the old alignment and colors until the debounced diff is ready.
-        # Transfer actions are disabled while _diff is None.
-        self._refresh_titles()
-        self.debounce.start()
-
-    def _request_diff(self):
-        self.statusBar().showMessage("Comparing…")
-        self.scheduler.submit_diff(
-            self.left.text(), self.right.text(),
-            self.left.state.revision, self.right.state.revision,
-            self.compare_options,
-        )
-
-    def _accept_diff(self, result: DiffResult):
-        if result.options != self.compare_options or (result.left_revision, result.right_revision) != (
-            self.left.state.revision, self.right.state.revision
-        ):
-            return
-        self._diff = result
-        self._selected_hunk = -1
-        self._refresh_stats()
-        self.left.show_hunks(result.hunks, True, result.left_spans)
-        self.right.show_hunks(result.hunks, False, result.right_spans)
-        self._update_shared_scroll_range()
-        self.overview.set_hunks(result.hunks)
-        self.gutter.set_hunks(result.hunks)
-        self._cursor_hunk_changed(self.left if self._last_active_side == "left" else self.right)
-        self.statusBar().showMessage(f"{len(result.hunks)} difference(s)")
-
     def _accept_merge(self, result):
         self.merge_view.accept_merge(result)
 
     def _merge_error(self, message: str):
         self.merge_view.merge_failed(message)
 
-    def _diff_error(self, message: str):
-        self.statusBar().showMessage(f"Comparison failed: {message}")
-
-    def _cursor_hunk_changed(self, editor: EditorWidget):
-        if self._updating_hunk_selection or self._diff is None:
-            return
-        line = editor.editor.textCursor().blockNumber()
-        self._selected_hunk = -1
-        for index, hunk in enumerate(self._diff.hunks):
-            start, end = (hunk.left_start, hunk.left_end) if editor is self.left else (hunk.right_start, hunk.right_end)
-            if start <= line < end:
-                self._selected_hunk = index
-                break
-        self._refresh_toolbar()
-
-    def _select_hunk(self, row: int):
-        if self._diff is None or not (0 <= row < len(self._diff.hunks)):
-            return
-        hunk = self._diff.hunks[row]
-        left_column = next((span.start for span in self._diff.left_spans if span.line == hunk.left_start), 0)
-        right_column = next((span.start for span in self._diff.right_spans if span.line == hunk.right_start), 0)
-        self._updating_hunk_selection = True
-        try:
-            self.left.select_hunk(hunk.left_start, hunk.left_end, left_column)
-            self.right.select_hunk(hunk.right_start, hunk.right_end, right_column)
-        finally:
-            self._updating_hunk_selection = False
-        start_row = min(
-            self.left.editor.visual_row(hunk.left_start),
-            self.right.editor.visual_row(hunk.right_start),
-        )
-        self.shared_scrollbar.setValue(max(0, start_row - self.shared_scrollbar.pageStep() // 3))
-        self._selected_hunk = row
-        active = self.left if self._last_active_side == "left" else self.right
-        active.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        self._refresh_toolbar()
-        modifier = "Cmd+Option" if sys.platform == "darwin" else "Ctrl+Alt"
-        self.statusBar().showMessage(f"Difference {row + 1} of {len(self._diff.hunks)} · {modifier}+← / → to apply")
-
     def _navigate(self, step: int):
         if self.tabs.currentWidget() is self.directory_comparison:
             if not self._directory_copy_busy:
                 self.directory_comparison.navigate(step)
             return
-        if self.tabs.currentWidget() is not self.file_comparison:
-            return
-        if self._diff is None or not self._diff.hunks:
-            return
-        current = self._selected_hunk
-        if current < 0:
-            row = 0 if step > 0 else len(self._diff.hunks) - 1
-        else:
-            row = (current + step) % len(self._diff.hunks)
-        self._select_hunk(row)
+        if self.tabs.currentWidget() is self.files:
+            self.files.navigate(step)
 
-    def _transfer(self, row: int, source_is_left: bool, append: bool = False):
+    def _transfer(self, source_is_left: bool, append: bool = False):
+        """Toolbar/menu apply: copy a directory entry or the selected Files block."""
         if self.tabs.currentWidget() is self.directory_comparison:
             self._copy_selected_entry(to_left=not source_is_left)
-            return
-        if self.tabs.currentWidget() is not self.file_comparison:
-            return
-        result = self._diff
-        if result is None or not (0 <= row < len(result.hunks)):
-            return
-        if (result.left_revision, result.right_revision) != (
-            self.left.state.revision, self.right.state.revision
-        ):
-            return
-        source = self.left if source_is_left else self.right
-        target = self.right if source_is_left else self.left
-        new_text = transfer_text(source.text(), target.text(), result.hunks[row], source_is_left, append)
-        self._apply_in_place(target, new_text)
-        self.statusBar().showMessage(f"Block {'appended' if append else 'copied'}; use Undo to revert")
+        elif self.tabs.currentWidget() is self.files:
+            self.files.transfer(self.files.selected_hunk, source_is_left, append)
 
-    def _apply_in_place(self, target: EditorWidget, new_text: str):
-        """Edit one pane without moving the view, so the result can be checked where it was."""
-        vertical = self.shared_scrollbar.value()
-        horizontal = self.shared_horizontal_scrollbar.value()
-        target.apply_text(new_text)
-        left, right = self.left.text(), self.right.text()
-        # ponytail: diff on the GUI thread so alignment settles before the next repaint;
-        # above 2 MB the async path keeps the UI responsive and the view may shift once.
-        if len(left) + len(right) <= 2_000_000:
-            self.debounce.stop()
-            self._accept_diff(compare(left, right, self.left.state.revision,
-                                      self.right.state.revision, self.compare_options))
-        self.shared_scrollbar.setValue(vertical)
-        self._scroll_both(self.shared_scrollbar.value())
-        self.horizontal_sync.scroll(horizontal)
-        target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+    def _delete_selected(self, target_is_left: bool | None = None):
+        if self.tabs.currentWidget() is self.files:
+            self.files.delete_selected(self.files.selected_hunk, target_is_left)
 
     def _copy_directory_entry(self, relative_path: str, to_left: bool):
         self.directory_comparison.select_path(relative_path)
@@ -1294,7 +968,7 @@ class MainWindow(QMainWindow):
         source = entry.right_path if to_left else entry.left_path
         target_root = Path(view.left_path.text() if to_left else view.right_path.text()).expanduser().resolve()
         target = target_root / entry.relative_path
-        if any(editor.state.dirty and editor.state.path == target for editor in (self.left, self.right)):
+        if any(editor.state.dirty and editor.state.path == target for editor in (self.files.left, self.files.right)):
             QMessageBox.warning(self, "Unsaved changes", f"Save or discard changes to {target} before copying.")
             return
         try:
@@ -1345,7 +1019,7 @@ class MainWindow(QMainWindow):
         source = entry.right_path if to_left else entry.left_path
         target_root = Path(view.left_path.text() if to_left else view.right_path.text()).expanduser().resolve()
         target = target_root / entry.relative_path
-        for editor in (self.left, self.right):
+        for editor in (self.files.left, self.files.right):
             path = editor.state.path
             if editor.state.dirty and path is not None and (
                 path.is_relative_to(source) or path.is_relative_to(target)
@@ -1398,128 +1072,15 @@ class MainWindow(QMainWindow):
             (source, target_root, entry.relative_path, source_stamp, target_stamp), done, failed,
         )
 
-    def _delete_selected(self, row: int, target_is_left: bool | None = None):
-        if self.tabs.currentWidget() is not self.file_comparison:
-            return
-        result = self._diff
-        if result is None or not (0 <= row < len(result.hunks)):
-            return
-        if (result.left_revision, result.right_revision) != (
-            self.left.state.revision, self.right.state.revision
-        ):
-            return
-        if target_is_left is None:
-            target_is_left = self._last_active_side == "left"
-        target = self.left if target_is_left else self.right
-        new_text = delete_hunk_text(target.text(), result.hunks[row], target_is_left)
-        if new_text != target.text():
-            self._apply_in_place(target, new_text)
-            self.statusBar().showMessage("Block deleted; use Undo to revert")
-
-    def _confirm_discard(self, editor: EditorWidget) -> bool:
-        if not editor.state.dirty:
-            return True
-        answer = QMessageBox.question(self, "Unsaved changes", "Discard unsaved changes in this pane?")
-        return answer == QMessageBox.StandardButton.Yes
-
-    def _open(self, editor: EditorWidget):
-        if id(editor) in self._busy_files or not self._confirm_discard(editor):
-            return
-        filename, _ = QFileDialog.getOpenFileName(self, "Open text file")
-        if not filename:
-            return
-        self.open_path(editor, Path(filename))
-
-    def open_path(self, editor: EditorWidget, path: Path, encoding: str | None = None):
-        if id(editor) in self._busy_files:
-            return
-        revision = editor.state.revision
-        self._busy_files.add(id(editor))
-        self._refresh_toolbar()
-        self.statusBar().showMessage(f"Opening {path.name}…")
-        self._serial += 1
-        key = self._serial
-
-        def done(loaded):
-            self._busy_files.discard(id(editor))
-            self._refresh_toolbar()
-            if editor.state.revision != revision:
-                self.statusBar().showMessage("Open discarded because the pane changed")
-                return
-            editor.load_text(loaded.text)
-            editor.state.path = path
-            editor.state.stamp = loaded.stamp
-            editor.state.newline = loaded.newline
-            editor.state.encoding = loaded.encoding
-            editor.state.bom = loaded.bom
-            self.syntax.schedule(editor)
-            self._refresh_titles()
-            self.statusBar().showMessage(f"Opened {path.name}")
-            self._recent_timer.start()
-
-        def failed(message):
-            self._busy_files.discard(id(editor))
-            self._refresh_toolbar()
-            QMessageBox.critical(self, "Open failed", message)
-
-        self.scheduler.submit_file(key, read_text_file, (path, encoding), done, failed)
-
     def _save_active(self, save_as: bool = False):
-        if self.tabs.currentWidget() is self.file_comparison:
-            self._save(self._active_pane(), save_as)
+        if self.tabs.currentWidget() is self.files:
+            self.files.save_active(save_as)
         elif self.tabs.currentWidget() is self.merge_view:
             self.merge_view.save(save_as)
 
-    def _save(self, editor: EditorWidget, save_as: bool = False):
-        if id(editor) in self._busy_files:
-            return
-        path = editor.state.path
-        if path is None or save_as:
-            filename, _ = QFileDialog.getSaveFileName(self, "Save text file", str(path or ""))
-            if not filename:
-                return
-            path = Path(filename)
-            if path.exists() and path != editor.state.path:
-                answer = QMessageBox.question(self, "Overwrite file", f"Replace {path.name}?")
-                if answer != QMessageBox.StandardButton.Yes:
-                    return
-                expected = file_stamp(path)
-            else:
-                expected = editor.state.stamp if path == editor.state.path else None
-        else:
-            expected = editor.state.stamp
-        text = editor.text()
-        revision = editor.state.revision
-        newline = editor.state.newline
-        bom = editor.state.bom
-        encoding = editor.state.encoding
-        self._busy_files.add(id(editor))
-        self._refresh_toolbar()
-        self.statusBar().showMessage(f"Saving {path.name}…")
-        self._serial += 1
-        key = self._serial
-
-        def done(stamp):
-            self._busy_files.discard(id(editor))
-            self._refresh_toolbar()
-            editor.state.path = path
-            editor.state.stamp = stamp
-            editor.state.saved_revision = revision
-            self.syntax.schedule(editor)
-            self._refresh_titles()
-            self.statusBar().showMessage(f"Saved {path.name}")
-            self._recent_timer.start()
-
-        def failed(message):
-            self._busy_files.discard(id(editor))
-            self._refresh_toolbar()
-            QMessageBox.critical(self, "Save failed", message)
-
-        self.scheduler.submit_file(key, write_file, (path, text, newline, bom, expected, encoding), done, failed)
-
     def closeEvent(self, event: QCloseEvent):
         self.git_merge_success = False
-        if self._busy_files or self._directory_copy_busy or self.merge_view.busy:
+        if self.files.busy or self._directory_copy_busy or self.merge_view.busy:
             QMessageBox.information(self, "Files busy", "Wait for file operations to finish before closing.")
             event.ignore()
             return
@@ -1531,7 +1092,7 @@ class MainWindow(QMainWindow):
                 if answer != QMessageBox.StandardButton.Yes:
                     event.ignore()
                     return
-        if (any(editor.state.dirty for editor in (self.left, self.right)) or
+        if (self.files.dirty or
                 (self.merge_view.result.state.dirty and not self.git_mergetool)):
             answer = QMessageBox.question(self, "Unsaved changes", "Quit and discard unsaved changes?")
             if answer != QMessageBox.StandardButton.Yes:
@@ -1543,8 +1104,7 @@ class MainWindow(QMainWindow):
             self._merge_native_toolbar_bridge.close()
         if self._settings_native_toolbar_bridge is not None:
             self._settings_native_toolbar_bridge.close()
-        self.debounce.stop()
-        self.syntax.stop()
+        self.files.stop()
         self.merge_view.syntax.stop()
         self.directory_comparison.cancel()
         self.scheduler.shutdown()

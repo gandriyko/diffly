@@ -7,10 +7,9 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit,
 
 
 class FindPanel(QWidget):
-    def __init__(self, window, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.window = window
-        self.target = window.left
+        self.target = None  # EditorWidget searched; set by show_search/set_target.
         self.setObjectName("FindPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
@@ -85,17 +84,11 @@ class FindPanel(QWidget):
         if self.target is pane:
             return
         self.target = pane
-        if pane is self.window.left:
-            label = "Left"
-        elif pane is self.window.right:
-            label = "Right"
-        else:
-            label = "Result"
-        self.target_label.setText(label)
+        self.target_label.setText(pane.name)
         self._message("")
 
-    def show_search(self, replace: bool = False, target=None):
-        self.set_target(target or self.window._active_pane())
+    def show_search(self, replace: bool, target):
+        self.set_target(target)
         self.replace_row.setVisible(replace)
         self._message("")
         selected = self.target.editor.textCursor().selectedText()
