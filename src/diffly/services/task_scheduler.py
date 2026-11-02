@@ -99,10 +99,10 @@ class TaskScheduler(QObject):
         future.add_done_callback(finished)
 
     def submit_merge(self, base: str, left: str, right: str,
-                     revisions: tuple[int, int, int]):
+                     revisions: tuple[int, int, int], options: CompareOptions = CompareOptions()):
         if self._merge_future is not None:
             self._merge_future.cancel()
-        future = self.process_pool.submit(merge, base, left, right, revisions)
+        future = self.process_pool.submit(merge, base, left, right, revisions, options)
         self._merge_future = future
 
         def finished(done):

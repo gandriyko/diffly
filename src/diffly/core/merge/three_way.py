@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from diffly.core.diff.engine import CompareOptions, normalize_line
+
 
 @dataclass(frozen=True, slots=True)
 class Edit:
@@ -86,7 +88,13 @@ def _render(base: list[str], side: list[str], edits: list[Edit], selected: list[
 
 
 def merge(base: str, left: str, right: str,
-          revisions: tuple[int, int, int]) -> MergeResult:
+          revisions: tuple[int, int, int],
+          options: CompareOptions = CompareOptions()) -> MergeResult:
+    # Like git's -Xignore-space-change: options only decide how an overlapping
+    # region resolves. A side whose change is ignorable yields to the other side.
+    def key(piece: list[str]) -> list[str]:
+        return piece if options == CompareOptions() else [normalize_line(line, options) for line in piece]
+
     base_lines = base.splitlines(keepends=True)
     left_lines = left.splitlines(keepends=True)
     right_lines = right.splitlines(keepends=True)
@@ -116,11 +124,11 @@ def merge(base: str, left: str, right: str,
         base_piece = base_lines[start:end]
         result_start = len(output)
         conflict_id = None
-        if left_piece == right_piece:
+        if key(left_piece) == key(right_piece):
             output.extend(left_piece)
-        elif left_piece == base_piece:
+        elif key(left_piece) == key(base_piece):
             output.extend(right_piece)
-        elif right_piece == base_piece:
+        elif key(right_piece) == key(base_piece):
             output.extend(left_piece)
         else:
             # Result starts with Left's text. The conflict record, rather than

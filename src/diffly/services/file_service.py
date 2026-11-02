@@ -1,6 +1,7 @@
 """Blocking file operations; callers run these in a worker thread."""
 
 import os
+import re
 import stat
 import tempfile
 import codecs
@@ -9,6 +10,15 @@ from pathlib import Path
 from charset_normalizer import from_bytes
 
 from diffly.core.documents.model import FileStamp
+
+ENCODINGS = (("UTF-8", "utf-8"), ("UTF-16 LE", "utf-16-le"),
+             ("UTF-16 BE", "utf-16-be"), ("Windows-1251", "cp1251"),
+             ("Windows-1252", "cp1252"), ("ISO-8859-1", "iso8859-1"),
+             ("Windows-1250", "cp1250"), ("Shift JIS", "shift_jis"))
+
+
+def encoding_label(encoding: str) -> str:
+    return next((name for name, value in ENCODINGS if value == encoding), encoding.upper())
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,13 +85,16 @@ def read_file(path: Path, encoding: str | None = None) -> LoadedFile:
     return LoadedFile(text.replace("\r\n", "\n").replace("\r", "\n"), newline, bom, stamp, encoding)
 
 
-def read_merge_file(path: Path | None, encoding: str | None = None) -> LoadedFile:
-    """Read a merge source and reject binary-looking decoded content."""
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
+
+
+def read_text_file(path: Path | None, encoding: str | None = None) -> LoadedFile:
+    """Read a text file for an editor and reject binary-looking decoded content."""
     if path is None:
         return LoadedFile("", "\n", False, None)
     loaded = read_file(path, encoding)
-    if any(ord(char) < 32 and char not in "\n\t" for char in loaded.text):
-        raise ValueError("Binary input is not supported for merging")
+    if _CONTROL_CHARS.search(loaded.text):
+        raise ValueError("Binary files are not supported")
     return loaded
 
 

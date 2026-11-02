@@ -46,26 +46,27 @@ class DiffResult:
     options: CompareOptions = CompareOptions()
 
 
+def normalize_line(line: str, options: CompareOptions) -> str:
+    content = line.rstrip("\r\n")
+    ending = line[len(content):]
+    if options.ignore_whitespace:
+        content = content.replace(" ", "").replace("\t", "")
+    elif options.ignore_trailing_whitespace:
+        content = content.rstrip(" \t")
+    if options.ignore_case:
+        content = content.casefold()
+    return content + ending
+
+
 def compare(left: str, right: str, left_revision: int, right_revision: int,
             options: CompareOptions = CompareOptions()) -> DiffResult:
     left_lines = left.splitlines(keepends=True)
     right_lines = right.splitlines(keepends=True)
-    def normalized(line: str) -> str:
-        content = line.rstrip("\r\n")
-        ending = line[len(content):]
-        if options.ignore_whitespace:
-            content = content.replace(" ", "").replace("\t", "")
-        elif options.ignore_trailing_whitespace:
-            content = content.rstrip(" \t")
-        if options.ignore_case:
-            content = content.casefold()
-        return content + ending
-
     if options == CompareOptions():
         left_keys, right_keys = left_lines, right_lines
     else:
-        left_keys = [normalized(line) for line in left_lines]
-        right_keys = [normalized(line) for line in right_lines]
+        left_keys = [normalize_line(line, options) for line in left_lines]
+        right_keys = [normalize_line(line, options) for line in right_lines]
     # Anchor the shared beginning before matching the rest. With repeated
     # blocks, SequenceMatcher can otherwise pair the right-hand block with a
     # later, longer match and report identical leading lines as deleted.

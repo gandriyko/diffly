@@ -239,6 +239,58 @@ def test_edit_spanning_conflicts_keeps_both_unresolved(qtbot, tmp_path):
     assert "2 unresolved" in view.footer.text()
 
 
+def test_merge_honours_comparison_options_for_overlapping_changes():
+    from diffly.core.diff.engine import CompareOptions
+    base, left, right = "a\nb\nc\n", "a\nb  \nc\n", "a\nB\nc\n"
+    assert len(merge(base, left, right, (0, 0, 0)).conflicts) == 1
+    merged = merge(base, left, right, (0, 0, 0), CompareOptions(ignore_trailing_whitespace=True))
+    assert merged.conflicts == () and merged.text == right
+
+
+def test_merge_encoding_menu_redecodes_sources(qtbot, tmp_path):
+    paths = tuple(tmp_path / name for name in ("base", "left", "right"))
+    for path in paths:
+        path.write_text("café\n", encoding="utf-8")
+    window = MainWindow(merge_enabled=True)
+    qtbot.addWidget(window)
+    view = window.merge_view
+    view.open_paths(*paths)
+    qtbot.waitUntil(lambda: not view.busy and view.result.text() == "café\n", timeout=5000)
+    view._set_encoding("cp1252")
+    qtbot.waitUntil(lambda: not view.busy and view.result.text() == "cafÃ©\n", timeout=5000)
+    assert view.sources[1].text() == "cafÃ©\n"
+    assert view.result.state.encoding == "cp1252"
+    assert "Windows-1252" in view.encoding_button.text()
+
+
+def test_first_f7_cursor_selection_and_shared_horizontal_scroll(qtbot, tmp_path):
+    paths = tuple(tmp_path / name for name in ("base", "left", "right"))
+    wide = "w" * 400
+    for path, text in zip(paths, ("A\nB\nC\nD\n", f"A\nL\nC\nX{wide}\n", "A\nR\nC\nY\n")):
+        path.write_text(text)
+    window = MainWindow(merge_enabled=True)
+    window.resize(900, 600)
+    qtbot.addWidget(window)
+    window.tabs.setCurrentWidget(window.merge_view)
+    window.show()
+    view = window.merge_view
+    view.open_paths(*paths)
+    qtbot.waitUntil(lambda: not view.busy and len(view._conflicts) == 2, timeout=5000)
+    qtbot.keyClick(view.result.editor, Qt.Key.Key_Down,
+                   Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+    assert view._selected == 0
+    cursor = view.result.editor.textCursor()
+    cursor.setPosition(view._conflicts[1].start)
+    view.result.editor.setTextCursor(cursor)
+    assert view._selected == 1
+    view.use("left")
+    assert view.result.text().endswith(f"X{wide}\n")
+    qtbot.waitUntil(lambda: view.horizontal_scrollbar.maximum() > 0, timeout=5000)
+    view.horizontal_scrollbar.setValue(50)
+    assert view.sources[1].editor.horizontalScrollBar().value() == 50
+    assert view.result.editor.horizontalScrollBar().value() == 50
+
+
 def test_meld_layout_has_center_result_and_gutter_actions(qtbot, tmp_path):
     paths = tuple(tmp_path / name for name in ("base", "left", "right"))
     for path, text in zip(paths, ("B\n", "L\n", "R\n")):
@@ -250,13 +302,15 @@ def test_meld_layout_has_center_result_and_gutter_actions(qtbot, tmp_path):
     window.show()
     assert window.merge_toolbar.isVisible()
     assert not window.toolbar.isVisible()
-    assert [action.text() for action in window.merge_toolbar.actions() if not action.isSeparator()] == [
-        "Previous conflict", "Next conflict", "Use Left", "Use Right"
+    assert [action.text() for action in window.merge_toolbar.actions() if action.text()] == [
+        "Refresh", "Previous conflict", "Next conflict", "Use Left", "Use Right", "Use Base", "Mark Resolved"
     ]
     assert window.merge_view.encoding_button.isVisible()
     view = window.merge_view
     view.open_paths(*paths)
     qtbot.waitUntil(lambda: not view.busy and len(view._conflicts) == 1, timeout=5000)
+    assert window.windowTitle() == "left ↔ right — Diffly"
+    assert window.merge_refresh_action.isEnabled() and window.merge_use_base_action.isEnabled()
     for pane in (view.sources[1], view.result, view.sources[2]):
         selections = pane.editor.extraSelections()
         assert any(selection.format.property(QTextCharFormat.Property.FullWidthSelection)
