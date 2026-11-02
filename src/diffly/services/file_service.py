@@ -21,6 +21,12 @@ def encoding_label(encoding: str) -> str:
     return next((name for name, value in ENCODINGS if value == encoding), encoding.upper())
 
 
+def status_encoding_text(encoding: str, bom: bool, newline: str) -> str:
+    """Status-bar text shared by the Files and Merge tabs."""
+    eol = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}.get(newline, "LF")
+    return f"Encoding: {encoding_label(encoding)}{' BOM' if bom else ''} · {eol}"
+
+
 @dataclass(frozen=True, slots=True)
 class LoadedFile:
     text: str

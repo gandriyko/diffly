@@ -283,12 +283,14 @@ def test_compact_layout_and_status_information(qtbot):
     window.show()
     assert window.tabs.count() == 3
     assert window.file_comparison.layout().contentsMargins().left() == 4
-    assert window.file_comparison.layout().horizontalSpacing() == 0
+    assert window.file_comparison.layout().spacing() == 0
     assert "1 changed" in window.summary_label.text()
     assert "1 identical" in window.summary_label.text()
     assert not window.findChildren(QToolButton, "IndentWidthButton")
-    assert "UTF-8" in window.encoding_label.text()
-    assert window.file_comparison.layout().rowCount() == 4
+    assert "UTF-8" in window.encoding_label.text() and "LF" in window.encoding_label.text()
+    # Splitter, shared horizontal scrollbar and find panel.
+    assert window.file_comparison.layout().count() == 3
+    assert window.left_title.text() == "Left · Untitled"
     assert not window.find_panel.isVisible()
     window.close()
 

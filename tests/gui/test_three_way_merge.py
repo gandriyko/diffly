@@ -66,8 +66,8 @@ def test_merge_display_options_toggle_all_panes_and_persist(qtbot, tmp_path, mon
     assert all(not pane.highlighter._spans for pane in panes)
     qtbot.waitUntil(lambda: all(not pane.editor.document().firstBlock().layout().formats()
                                 for pane in panes), timeout=5000)
-    view.accept_syntax("merge-1", view.sources[1].state.revision, "python",
-                       ((0, 0, 3, "keyword"),))
+    view.syntax.accept(("merge-1", view.sources[1].state.revision, "python",
+                        ((0, 0, 3, "keyword"),)))
     assert not view.sources[1].highlighter._spans
     assert load_config().settings["show_line_numbers"] is True
     assert load_config().settings["syntax_highlighting"] is False
@@ -245,6 +245,14 @@ def test_merge_honours_comparison_options_for_overlapping_changes():
     assert len(merge(base, left, right, (0, 0, 0)).conflicts) == 1
     merged = merge(base, left, right, (0, 0, 0), CompareOptions(ignore_trailing_whitespace=True))
     assert merged.conflicts == () and merged.text == right
+
+
+def test_merge_reports_change_kinds_and_character_spans():
+    from diffly.core.diff.engine import TextSpan
+    merged = merge("a\nb\n", "a\nbX\n", "a\nb\nc\n", (0, 0, 0))
+    assert merged.left_changes == ((1, 2, "replace"),)
+    assert merged.right_changes == ((2, 3, "insert"),)
+    assert TextSpan(1, 1, 2) in merged.left_spans
 
 
 def test_merge_encoding_menu_redecodes_sources(qtbot, tmp_path):

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from diffly.core.diff.engine import CompareOptions, normalize_line
+from diffly.core.diff.engine import CompareOptions, TextSpan, compare, normalize_line
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +38,13 @@ class MergeResult:
     text: str
     conflicts: tuple[Conflict, ...]
     revisions: tuple[int, int, int]
-    left_changes: tuple[tuple[int, int], ...] = ()
-    right_changes: tuple[tuple[int, int], ...] = ()
+    # (side_start, side_end, "insert" | "replace") per edit against Base.
+    left_changes: tuple[tuple[int, int, str], ...] = ()
+    right_changes: tuple[tuple[int, int, str], ...] = ()
     regions: tuple[MergeRegion, ...] = ()
+    # Changed characters within replaced lines, as in the Files tab.
+    left_spans: tuple[TextSpan, ...] = ()
+    right_spans: tuple[TextSpan, ...] = ()
 
 
 def _edits(base: list[str], side: list[str]) -> list[Edit]:
@@ -141,7 +145,14 @@ def merge(base: str, left: str, right: str,
                                          (result_start, len(output)), conflict_id))
         cursor = end
     output.extend(base_lines[cursor:])
+
+    def changes(edits: list[Edit]) -> tuple[tuple[int, int, str], ...]:
+        return tuple((edit.side_start, edit.side_end, "insert" if edit.start == edit.end else "replace")
+                     for edit in edits)
+
+    # ponytail: two extra two-way diffs only for character spans; fold into
+    # _edits if merge time on huge files matters.
     return MergeResult("".join(output), tuple(conflicts), revisions,
-                       tuple((edit.side_start, edit.side_end) for edit in left_edits),
-                       tuple((edit.side_start, edit.side_end) for edit in right_edits),
-                       tuple(merge_regions))
+                       changes(left_edits), changes(right_edits), tuple(merge_regions),
+                       compare(base, left, 0, 0, options).right_spans,
+                       compare(base, right, 0, 0, options).right_spans)

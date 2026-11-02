@@ -39,6 +39,22 @@ class DiffOverview(QWidget):
             self.right_editor.visual_row(self.right_editor.blockCount()),
         )
 
+    def _markers(self):
+        """Yield (start row, end row, overview theme key) per difference."""
+        for hunk in self.hunks:
+            start = min(
+                self.left_editor.visual_row(hunk.left_start),
+                self.right_editor.visual_row(hunk.right_start),
+            )
+            end = max(
+                self.left_editor.visual_row(hunk.left_end),
+                self.right_editor.visual_row(hunk.right_end),
+            )
+            yield start, end, {
+                "insert": "overview_added",
+                "delete": "overview_removed",
+            }.get(hunk.tag, "overview_replace")
+
     def _viewport_rect(self) -> tuple[int, int]:
         total = max(1, self.scroll_controller.maximum() + self.scroll_controller.pageStep())
         top = round(self.height() * self.scroll_controller.value() / total)
@@ -54,22 +70,9 @@ class DiffOverview(QWidget):
         track_x, track_w = 4, self.width() - 8
         painter.fillRect(track_x, 0, track_w, self.height(), QColor(c["background"]))
         total = self._total_lines()
-        for hunk in self.hunks:
-            start = min(
-                self.left_editor.visual_row(hunk.left_start),
-                self.right_editor.visual_row(hunk.right_start),
-            )
-            end = max(
-                self.left_editor.visual_row(hunk.left_end),
-                self.right_editor.visual_row(hunk.right_end),
-                start + 1,
-            )
+        for start, end, color_key in self._markers():
             top = round(self.height() * start / total)
-            bottom = round(self.height() * end / total)
-            color_key = {
-                "insert": "overview_added",
-                "delete": "overview_removed",
-            }.get(hunk.tag, "overview_replace")
+            bottom = round(self.height() * max(end, start + 1) / total)
             painter.fillRect(track_x, top, track_w, max(3, bottom - top), QColor(c[color_key]))
         if self.scroll_controller.maximum() > 0:
             top, size = self._viewport_rect()

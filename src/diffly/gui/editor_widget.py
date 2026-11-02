@@ -1,11 +1,27 @@
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMenu, QPlainTextEdit, QTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from diffly.core.diff.engine import Hunk, TextSpan
 from diffly.core.documents.model import DocumentState
 from diffly.gui.code_editor import CodeEditor
 from diffly.gui.syntax_highlighter import SyntaxHighlighter
+from diffly.services.file_service import ENCODINGS
+
+
+def encoding_button(parent: QWidget, choose) -> QToolButton:
+    """Status-bar encoding button whose menu calls choose(encoding or None for Auto)."""
+    button = QToolButton(parent)
+    button.setObjectName("EncodingButton")
+    button.setAutoRaise(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    menu = QMenu(button)
+    menu.addAction("Auto", lambda: choose(None))
+    for label, encoding in ENCODINGS:
+        menu.addAction(label, lambda checked=False, value=encoding: choose(value))
+    button.setMenu(menu)
+    return button
 
 
 class EditorWidget(QWidget):
@@ -18,6 +34,8 @@ class EditorWidget(QWidget):
         self.editor = CodeEditor(parent=self)
         self.highlighter = SyntaxHighlighter(self.editor.document())
         self.syntax_language = None
+        # Path used for language detection while state.path is unset.
+        self.syntax_path = None
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
         layout = QVBoxLayout(self)
@@ -92,22 +110,33 @@ class EditorWidget(QWidget):
             missing = (other_end - other_start) - (end - start)
             if missing > 0:
                 placeholders.append((end, missing))
-            if start == end:
-                continue
             key = "diff_replace" if hunk.tag == "replace" else (
                 "diff_removed" if left else "diff_added"
             )
-            color = QColor(self.theme.get(key, "#fff1b8"))
-            for line in range(start, end):
-                block = self.editor.document().findBlockByNumber(line)
-                if not block.isValid():
-                    break
-                selection = QTextEdit.ExtraSelection()
-                selection.cursor = QTextCursor(block)
-                selection.format = QTextCharFormat()
-                selection.format.setBackground(color)
-                selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
-                selections.append(selection)
+            selections += self.line_selections(start, end, key)
+        selections += self.span_selections(spans)
+        self.editor.setExtraSelections(selections)
+        self.editor.set_placeholder_ranges(tuple(placeholders))
+
+    def line_selections(self, start: int, end: int, theme_key: str) -> list:
+        """Full-width backgrounds for lines [start, end) in a theme color."""
+        color = QColor(self.theme[theme_key])
+        selections = []
+        for line in range(start, end):
+            block = self.editor.document().findBlockByNumber(line)
+            if not block.isValid():
+                break
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(block)
+            selection.format = QTextCharFormat()
+            selection.format.setBackground(color)
+            selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+            selections.append(selection)
+        return selections
+
+    def span_selections(self, spans) -> list:
+        """Stronger backgrounds for changed characters within lines."""
+        selections = []
         for span in spans:
             block = self.editor.document().findBlockByNumber(span.line)
             if not block.isValid():
@@ -122,10 +151,9 @@ class EditorWidget(QWidget):
             selection.cursor.setPosition(start)
             selection.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
             selection.format = QTextCharFormat()
-            selection.format.setBackground(QColor(self.theme.get("diff_text", "#d38b44")))
+            selection.format.setBackground(QColor(self.theme["diff_text"]))
             selections.append(selection)
-        self.editor.setExtraSelections(selections)
-        self.editor.set_placeholder_ranges(tuple(placeholders))
+        return selections
 
     def select_hunk(self, start: int, end: int, column: int = 0):
         document = self.editor.document()
