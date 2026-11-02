@@ -56,7 +56,7 @@ class SettingsPage(QWidget):
         self.theme_choice.setStyle(QStyleFactory.create("Fusion"))
         for key, theme in themes.items():
             self.theme_choice.addItem(theme.get("name", key), key)
-        self.theme_choice.setCurrentIndex(max(0, self.theme_choice.findData(settings.get("theme", "gruvbox"))))
+        self.theme_choice.setCurrentIndex(max(0, self.theme_choice.findData(settings.get("theme", "dark"))))
         self._setting_row(appearance_layout, "Theme", self.theme_choice)
         self._committed_font_size = max(8, min(32, int(settings.get("font_size", 14))))
         self.font_size = QLineEdit(str(self._committed_font_size), appearance)

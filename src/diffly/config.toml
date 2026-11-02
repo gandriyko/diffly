@@ -1,5 +1,5 @@
 [settings]
-theme = "gruvbox"
+theme = "dark"
 font_family = "" # Empty selects the system monospace font.
 font_size = 14
 tab_width = 4

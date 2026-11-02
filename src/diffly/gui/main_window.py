@@ -195,7 +195,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.files.footer)
         self.statusBar().addPermanentWidget(self.directory_summary_label)
         self.statusBar().addPermanentWidget(self.files.encoding_button)
-        self._apply_theme(self.config.settings.get("theme", "gruvbox"))
+        self._apply_theme(self.config.settings.get("theme", "dark"))
         self._refresh_toolbar()
         self.statusBar().showMessage("Open a file in each pane to compare")
         self._tab_changed(self.tabs.currentIndex())
@@ -674,7 +674,7 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, name: str):
         if name not in self.config.themes:
-            name = "gruvbox"
+            name = "dark"
         self._active_theme_name = name
         theme = self.config.themes[name]
         apply_theme(QApplication.instance(), theme)
