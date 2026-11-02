@@ -27,8 +27,9 @@ def encoding_button(parent: QWidget, choose) -> QToolButton:
 class EditorWidget(QWidget):
     edited = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, name: str = ""):
         super().__init__(parent)
+        self.name = name  # "Left", "Right", "Result"…; shown by the find panel.
         self.state = DocumentState()
         self.theme: dict = {}
         self.editor = CodeEditor(parent=self)

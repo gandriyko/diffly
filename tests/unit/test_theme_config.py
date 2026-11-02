@@ -5,6 +5,8 @@ def test_bundled_themes_and_toml_override(tmp_path, monkeypatch):
     config = load_config()
     assert {"gruvbox", "dark", "light", "solarized_dark"} <= set(config.themes)
     assert all(all(key in theme for key in COLOR_KEYS) for theme in config.themes.values())
+    monkeypatch.setenv("DIFFLY_CONFIG", str(tmp_path / "missing.toml"))
+    assert load_config().settings["theme"] == "dark"
     override = tmp_path / "config.toml"
     override.write_text('[settings]\ntheme = "light"\nfont_size = 15\n[themes.gruvbox]\naccent = "#ffffff"\n')
     monkeypatch.setenv("DIFFLY_CONFIG", str(override))

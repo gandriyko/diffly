@@ -16,16 +16,16 @@ def test_save_action_targets_only_active_editor(qtbot, monkeypatch):
     assert not any(action.shortcut() == QKeySequence("Ctrl+Shift+S") for action in file_menu.actions())
 
     calls = []
-    monkeypatch.setattr(window, "_save", lambda editor, save_as=False: calls.append((editor, save_as)))
-    window.tabs.setCurrentWidget(window.file_comparison)
-    window.left.editor.setFocus()
-    qtbot.waitUntil(window.left.editor.hasFocus)
+    monkeypatch.setattr(window.files, "save", lambda editor, save_as=False: calls.append((editor, save_as)))
+    window.tabs.setCurrentWidget(window.files)
+    window.files.left.editor.setFocus()
+    qtbot.waitUntil(window.files.left.editor.hasFocus)
     save.trigger()
-    window.right.editor.setFocus()
-    qtbot.waitUntil(window.right.editor.hasFocus)
+    window.files.right.editor.setFocus()
+    qtbot.waitUntil(window.files.right.editor.hasFocus)
     save.trigger()
     save_as.trigger()
-    assert calls == [(window.left, False), (window.right, False), (window.right, True)]
+    assert calls == [(window.files.left, False), (window.files.right, False), (window.files.right, True)]
     window.tabs.setCurrentWidget(window.directory_comparison)
     save.trigger()
     assert len(calls) == 3

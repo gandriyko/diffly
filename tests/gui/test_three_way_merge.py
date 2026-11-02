@@ -50,10 +50,10 @@ def test_merge_display_options_toggle_all_panes_and_persist(qtbot, tmp_path, mon
     qtbot.addWidget(window)
     view = window.merge_view
     view.open_paths(*paths)
-    for editor in (window.left, window.right):
+    for editor in (window.files.left, window.files.right):
         editor.state.path = tmp_path / "sample.py"
         editor.load_text('def other():\n    return "files"\n')
-    panes = (*view.sources, view.result, window.left, window.right)
+    panes = (*view.sources, view.result, window.files.left, window.files.right)
     qtbot.waitUntil(lambda: not view.busy and all(pane.highlighter._spans for pane in panes),
                     timeout=5000)
     settings = window.settings_page
@@ -82,8 +82,8 @@ def test_merge_display_options_toggle_all_panes_and_persist(qtbot, tmp_path, mon
     assert reopened.settings_page.syntax_highlighting.isChecked()
     assert reopened.merge_view.line_numbers_visible
     assert reopened.merge_view.syntax_highlighting_enabled
-    assert reopened.left.editor.side_width() > 0
-    assert reopened.right.editor.side_width() > 0
+    assert reopened.files.left.editor.side_width() > 0
+    assert reopened.files.right.editor.side_width() > 0
 
 
 def test_merge_view_resolves_and_undoes(qtbot, tmp_path):
@@ -345,7 +345,7 @@ def test_meld_layout_has_center_result_and_gutter_actions(qtbot, tmp_path):
     assert not view.right_gutter.button.isVisible()
     view.result.editor.undo()
     assert "1 unresolved" in view.footer.text()
-    window.tabs.setCurrentWidget(window.file_comparison)
+    window.tabs.setCurrentWidget(window.files)
     assert window.toolbar.isVisible()
     assert not window.merge_toolbar.isVisible()
 

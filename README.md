@@ -95,7 +95,7 @@ When run from a terminal, **Ctrl+C** closes Diffly through the usual unsaved-cha
 
 On macOS, press **Command+Option+Down** for the next difference and **Command+Option+Up** for the previous one. **Command+Option+Left/Right** applies the selected difference toward the arrow. On Linux, use **Ctrl+Alt** with the same arrow keys. Navigation moves the text cursor to the changed line in the active editor. **Command+Option+Delete** on macOS or **Ctrl+Alt+Delete** on Linux deletes the selected block from the active editor. Plain arrow and Delete keys retain their usual text-editing behavior inside an editor.
 
-The bundled [TOML configuration](src/diffly/config.toml) defines font size, tab width, initial comparison rules, the initial theme, and four themes: Gruvbox Dark, Dark, Light, and Solarized Dark. Choose a theme on the **Settings** page; Diffly saves that choice to the user TOML configuration. For other persistent overrides, create `~/.config/diffly/config.toml` with only the values you want to change, for example:
+The bundled [TOML configuration](src/diffly/config.toml) defines font size, tab width, initial comparison rules, the initial theme (Dark), and four themes: Gruvbox Dark, Dark, Light, and Solarized Dark. Choose a theme on the **Settings** page; Diffly saves that choice to the user TOML configuration. For other persistent overrides, create `~/.config/diffly/config.toml` with only the values you want to change, for example:
 
 ```toml
 [settings]
