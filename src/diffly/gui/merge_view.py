@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
                                QPushButton, QScrollBar, QVBoxLayout, QWidget)
 
 from diffly.core.diff.engine import CompareOptions
-from diffly.core.documents.syntax import language_for
 from diffly.core.merge.three_way import MergeResult
 from diffly.gui.diff_gutter import BUTTON, draw_ribbon, line_edges
 from diffly.gui.diff_overview import DiffOverview
@@ -17,15 +16,10 @@ from diffly.gui.editor_widget import EditorWidget, encoding_button
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.scroll_sync import HorizontalScrollSync, follow_scroll, scroll_to_row
 from diffly.gui.seamless_splitter import SeamlessSplitter
+from diffly.gui.syntax_controller import SyntaxController
 from diffly.services.file_service import file_stamp, read_text_file, status_encoding_text, write_file
 
 
-def _merge_language(path: Path | None, text: str) -> str | None:
-    sample = text[:512]
-    language = language_for(path, sample)
-    if language is None and path is not None and path.suffix.lower() == ".txt":
-        language = language_for(None, sample)
-    return language
 
 
 # (pane background, overview/edge) theme keys, shared with the Files tab.
@@ -227,10 +221,8 @@ class MergeView(QWidget):
         self._choice = False
         self._loaded = None
         self._merged: MergeResult | None = None
-        self._syntax_timer = QTimer(self)
-        self._syntax_timer.setSingleShot(True)
-        self._syntax_timer.setInterval(180)
-        self._syntax_timer.timeout.connect(lambda: self._request_syntax(3))
+        self.syntax = SyntaxController(scheduler, "merge", (*self.sources, self.result),
+                                       syntax_highlighting_enabled, self)
         self._paint_timer = QTimer(self)
         self._paint_timer.setSingleShot(True)
         self._paint_timer.setInterval(300)
@@ -324,7 +316,6 @@ class MergeView(QWidget):
             pane.editor.cursorPositionChanged.connect(
                 lambda source=pane: self._cursor_conflict_changed(source))
         self.result.edited.connect(self._update_status)
-        self.result.edited.connect(self._syntax_timer.start)
         self._update_status()
 
     def eventFilter(self, watched, event):
@@ -406,13 +397,7 @@ class MergeView(QWidget):
         if self.syntax_highlighting_enabled == enabled:
             return
         self.syntax_highlighting_enabled = enabled
-        if enabled:
-            for index in range(4):
-                self._request_syntax(index)
-        else:
-            self._syntax_timer.stop()
-            for editor in (*self.sources, self.result):
-                editor.highlighter.set_spans(())
+        self.syntax.set_enabled(enabled)
 
     def confirm_discard(self) -> bool:
         if not self.result.state.dirty:
@@ -477,11 +462,9 @@ class MergeView(QWidget):
                 editor.load_text(item.text)
                 editor.state.path = path
                 editor.state.stamp = item.stamp
-                editor.set_syntax_language(_merge_language(path, item.text))
                 label.setText(f"{title} · {path.name if path else '(empty)'}")
                 label.setToolTip(str(path) if path else "No common base for this conflict")
-            for index in range(3):
-                self._request_syntax(index)
+                self.syntax.request(editor)
             self._paths = paths
             self._git_existing = existing
             self.result.state.path = output
@@ -490,7 +473,7 @@ class MergeView(QWidget):
             self.result.state.encoding = loaded[1].encoding
             self.result.state.bom = loaded[1].bom
             self.result.state.newline = loaded[1].newline
-            self.result.set_syntax_language(_merge_language(paths[1], loaded[1].text))
+            self.result.syntax_path = paths[1]
         finally:
             self._loading = False
         self.paths_changed.emit()
@@ -539,7 +522,7 @@ class MergeView(QWidget):
             self._loading = False
         self._conflicts = []
         self._merged = None if use_existing else merged
-        self._request_syntax(3)
+        self.syntax.request(self.result)
         lines = merged.text.splitlines(keepends=True)
         for record in (() if use_existing else merged.conflicts):
             start = sum(len(line.encode("utf-16-le")) // 2 for line in lines[:record.result_range[0]])
@@ -629,23 +612,6 @@ class MergeView(QWidget):
         start, end = getattr(record, f"{side}_range")
         return "".join(self.sources[index].text().splitlines(keepends=True)[start:end])
 
-    def _request_syntax(self, index: int):
-        if not self.syntax_highlighting_enabled:
-            return
-        editor = (*self.sources, self.result)[index]
-        if editor.syntax_language is not None:
-            self.scheduler.submit_syntax(f"merge-{index}", editor.text(),
-                                         editor.syntax_language, editor.state.revision)
-
-    def accept_syntax(self, key: str, revision: int, language: str, spans):
-        try:
-            index = int(key.removeprefix("merge-"))
-            editor = (*self.sources, self.result)[index]
-        except (ValueError, IndexError):
-            return
-        if (self.syntax_highlighting_enabled and editor.state.revision == revision
-                and editor.syntax_language == language):
-            editor.highlighter.set_spans(spans)
 
     def _text_for(self, conflict: _ConflictState, side: str) -> str:
         return self._text_for_record(conflict.record, side)

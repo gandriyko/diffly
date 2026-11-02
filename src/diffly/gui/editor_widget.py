@@ -34,6 +34,8 @@ class EditorWidget(QWidget):
         self.editor = CodeEditor(parent=self)
         self.highlighter = SyntaxHighlighter(self.editor.document())
         self.syntax_language = None
+        # Path used for language detection while state.path is unset.
+        self.syntax_path = None
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
         layout = QVBoxLayout(self)

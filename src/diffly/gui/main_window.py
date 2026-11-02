@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 
 from diffly.core.diff.engine import CompareOptions, DiffResult, compare, delete_hunk_text, transfer_text
 from diffly.core.directories.filters import DEFAULT_PRESETS, PRESETS
-from diffly.core.documents.syntax import language_for
 from diffly.gui.diff_gutter import DiffGutter
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.directory_comparison import DirectoryComparisonView
@@ -35,6 +34,7 @@ from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.merge_view import MergeView
 from diffly.gui.scroll_sync import HorizontalScrollSync, follow_scroll, scroll_to_row
 from diffly.gui.seamless_splitter import SeamlessSplitter
+from diffly.gui.syntax_controller import SyntaxController
 from diffly.gui.theme import (
     apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
     save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
@@ -113,7 +113,6 @@ class MainWindow(QMainWindow):
         self.scheduler = TaskScheduler(self)
         self.scheduler.diff_ready.connect(self._accept_diff)
         self.scheduler.diff_failed.connect(self._diff_error)
-        self.scheduler.syntax_ready.connect(self._accept_syntax)
         self.scheduler.merge_ready.connect(self._accept_merge)
         self.scheduler.merge_failed.connect(self._merge_error)
         self.config = load_config()
@@ -275,13 +274,8 @@ class MainWindow(QMainWindow):
         self.debounce.setSingleShot(True)
         self.debounce.setInterval(300)
         self.debounce.timeout.connect(self._request_diff)
-        self._syntax_timers = {}
-        for side, editor in (("left", self.left), ("right", self.right)):
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.setInterval(180)
-            timer.timeout.connect(lambda s=side, e=editor: self._request_syntax(s, e))
-            self._syntax_timers[editor] = timer
+        self.syntax = SyntaxController(self.scheduler, "files", (self.left, self.right),
+                                       self.syntax_highlighting_enabled, self)
         self.summary_label = QLabel()
         self.directory_summary_label = QLabel()
         self.encoding_label = encoding_button(self, self._choose_encoding)
@@ -805,14 +799,7 @@ class MainWindow(QMainWindow):
         for editor in (self.left, self.right):
             editor.editor.set_line_numbers_visible(line_numbers)
         self.syntax_highlighting_enabled = syntax_highlighting
-        if syntax_highlighting:
-            for side, editor in (("left", self.left), ("right", self.right)):
-                self._request_syntax(side, editor)
-        else:
-            for timer in self._syntax_timers.values():
-                timer.stop()
-            for editor in (self.left, self.right):
-                editor.highlighter.set_spans(())
+        self.syntax.set_enabled(syntax_highlighting)
         self.horizontal_sync.update_range()
         self.gutter.update()
         self.config.settings["show_line_numbers"] = line_numbers
@@ -1169,28 +1156,6 @@ class MainWindow(QMainWindow):
         # Transfer actions are disabled while _diff is None.
         self._refresh_titles()
         self.debounce.start()
-        if hasattr(self, "_syntax_timers"):
-            self._syntax_timers[editor].start()
-
-    def _request_syntax(self, side: str, editor: EditorWidget):
-        text = editor.text()
-        language = language_for(editor.state.path, text[:512])
-        editor.set_syntax_language(language)
-        if not self.syntax_highlighting_enabled or language is None or len(text) > 2_000_000:
-            editor.highlighter.set_spans(())
-            return
-        self.scheduler.submit_syntax(side, text, language, editor.state.revision)
-
-    def _accept_syntax(self, result):
-        side, revision, language, spans = result
-        if side.startswith("merge-"):
-            self.merge_view.accept_syntax(side, revision, language, spans)
-            return
-        editor = self.left if side == "left" else self.right
-        if (not self.syntax_highlighting_enabled or editor.state.revision != revision
-                or editor.syntax_language != language):
-            return
-        editor.highlighter.set_spans(spans)
 
     def _request_diff(self):
         self.statusBar().showMessage("Comparing…")
@@ -1487,8 +1452,7 @@ class MainWindow(QMainWindow):
             editor.state.newline = loaded.newline
             editor.state.encoding = loaded.encoding
             editor.state.bom = loaded.bom
-            editor.set_syntax_language(language_for(path, loaded.text[:512]))
-            self._syntax_timers[editor].start()
+            self.syntax.schedule(editor)
             self._refresh_titles()
             self.statusBar().showMessage(f"Opened {path.name}")
             self._recent_timer.start()
@@ -1541,8 +1505,7 @@ class MainWindow(QMainWindow):
             editor.state.path = path
             editor.state.stamp = stamp
             editor.state.saved_revision = revision
-            editor.set_syntax_language(language_for(path, editor.text()[:512]))
-            self._syntax_timers[editor].start()
+            self.syntax.schedule(editor)
             self._refresh_titles()
             self.statusBar().showMessage(f"Saved {path.name}")
             self._recent_timer.start()
@@ -1581,9 +1544,8 @@ class MainWindow(QMainWindow):
         if self._settings_native_toolbar_bridge is not None:
             self._settings_native_toolbar_bridge.close()
         self.debounce.stop()
-        for timer in self._syntax_timers.values():
-            timer.stop()
-        self.merge_view._syntax_timer.stop()
+        self.syntax.stop()
+        self.merge_view.syntax.stop()
         self.directory_comparison.cancel()
         self.scheduler.shutdown()
         self.git_merge_success = self.git_mergetool and self.merge_view.git_merge_complete()

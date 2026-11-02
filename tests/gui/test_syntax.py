@@ -33,7 +33,7 @@ def test_stale_syntax_result_is_ignored(qtbot):
     window.left.load_text('{"a": 1}')
     stale_revision = window.left.state.revision
     window.left.editor.insertPlainText('new')
-    window._accept_syntax(("left", stale_revision, "json", ((0, 0, 5, "key"),)))
+    window.syntax.accept(("files-0", stale_revision, "json", ((0, 0, 5, "key"),)))
     assert not window.left.highlighter._spans
     window.left.state.saved_revision = window.left.state.revision
     window.close()
@@ -44,6 +44,9 @@ def test_language_detection_and_tokenization():
     assert language_for(Path("a.json"), "") == "json"
     assert language_for(None, "  {\"a\": 1}") == "json"
     assert language_for(Path("a.txt"), "def x():") is None
+    from diffly.gui.syntax_controller import detect_language
+    assert detect_language(Path("a.txt"), "#!/usr/bin/env python3\n") == "python"
+    assert detect_language(Path("a.py"), "") == "python"
     _, _, spans = tokenize_document('def x():\n  return "ok"\n', "python", 1)
     assert (0, 0, 3, "keyword") in spans
     assert (0, 4, 5, "function") in spans

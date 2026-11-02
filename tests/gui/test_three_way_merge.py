@@ -66,8 +66,8 @@ def test_merge_display_options_toggle_all_panes_and_persist(qtbot, tmp_path, mon
     assert all(not pane.highlighter._spans for pane in panes)
     qtbot.waitUntil(lambda: all(not pane.editor.document().firstBlock().layout().formats()
                                 for pane in panes), timeout=5000)
-    view.accept_syntax("merge-1", view.sources[1].state.revision, "python",
-                       ((0, 0, 3, "keyword"),))
+    view.syntax.accept(("merge-1", view.sources[1].state.revision, "python",
+                        ((0, 0, 3, "keyword"),)))
     assert not view.sources[1].highlighter._spans
     assert load_config().settings["show_line_numbers"] is True
     assert load_config().settings["syntax_highlighting"] is False
