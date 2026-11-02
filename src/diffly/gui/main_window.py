@@ -13,12 +13,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QMenu,
     QInputDialog,
     QScrollBar,
     QTabWidget,
     QToolBar,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -29,25 +27,28 @@ from diffly.core.documents.syntax import language_for
 from diffly.gui.diff_gutter import DiffGutter
 from diffly.gui.diff_overview import DiffOverview
 from diffly.gui.directory_comparison import DirectoryComparisonView
-from diffly.gui.editor_widget import EditorWidget
+from diffly.gui.editor_widget import EditorWidget, encoding_button
 from diffly.gui.find_panel import FindPanel
 from diffly.gui.icons import toolbar_icon
 from diffly.gui.settings_page import SettingsPage
 from diffly.gui.linux_titlebar import LinuxTitleBar
 from diffly.gui.merge_view import MergeView
+from diffly.gui.scroll_sync import HorizontalScrollSync, follow_scroll, scroll_to_row
 from diffly.gui.seamless_splitter import SeamlessSplitter
 from diffly.gui.theme import (
     apply_theme, editor_font, load_config, save_comparison_options, save_directory_filters,
     save_editor_display_options, save_font_size, save_indent_width, save_selected_theme,
 )
 from diffly.platform.macos import install_inline_toolbar
-from diffly.services.file_service import ENCODINGS, file_stamp, read_text_file, status_encoding_text, write_file
+from diffly.services.file_service import file_stamp, read_text_file, status_encoding_text, write_file
 from diffly.services.directory_service import (
     copy_directory_checked, copy_file_checked, directory_stamp, path_stamp, regular_file_stamp,
 )
 from diffly.services.task_scheduler import TaskScheduler
 from diffly.services.session_store import load_sessions, remember, save_sessions
 
+# Tooltip name of the Ctrl+Alt shortcut prefix (Qt maps Ctrl to Command on macOS).
+NAV_MODIFIER = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
 
 def _suppress_dialogs():
     """DIFFLY_NO_DIALOGS=1: never block on a modal dialog in tests or scripted runs.
@@ -260,13 +261,7 @@ class MainWindow(QMainWindow):
             editor.editor.verticalScrollBar().rangeChanged.connect(self._update_shared_scroll_range)
         self.shared_scrollbar.valueChanged.connect(self._scroll_both)
         self._update_shared_scroll_range()
-        self._syncing_horizontal_scroll = False
-        for editor in (self.left, self.right):
-            bar = editor.editor.horizontalScrollBar()
-            bar.valueChanged.connect(self._scroll_both_horizontal)
-            bar.rangeChanged.connect(self._update_horizontal_scroll_range)
-        self.shared_horizontal_scrollbar.valueChanged.connect(self._scroll_both_horizontal)
-        self._update_horizontal_scroll_range()
+        self.horizontal_sync = HorizontalScrollSync((self.left, self.right), self.shared_horizontal_scrollbar)
         self._make_menu()
         self._make_toolbar()
         self._make_merge_toolbar()
@@ -289,17 +284,8 @@ class MainWindow(QMainWindow):
             self._syntax_timers[editor] = timer
         self.summary_label = QLabel()
         self.directory_summary_label = QLabel()
-        self.encoding_label = QToolButton()
-        self.encoding_label.setObjectName("EncodingButton")
-        self.encoding_label.setAutoRaise(True)
-        self.encoding_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.encoding_label = encoding_button(self, self._choose_encoding)
         self.encoding_label.setToolTip("Encoding of the active pane")
-        self.encoding_label.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        encoding_menu = QMenu(self.encoding_label)
-        encoding_menu.addAction("Auto", lambda: self._choose_encoding(None))
-        for label, encoding in ENCODINGS:
-            encoding_menu.addAction(label, lambda checked=False, value=encoding: self._choose_encoding(value))
-        self.encoding_label.setMenu(encoding_menu)
         self.statusBar().addPermanentWidget(self.summary_label)
         self.statusBar().addPermanentWidget(self.directory_summary_label)
         self.statusBar().addPermanentWidget(self.encoding_label)
@@ -577,9 +563,8 @@ class MainWindow(QMainWindow):
             self.directory_comparison.right_path.setText(str(paths[1]))
             self.directory_comparison.compare()
 
-    def _make_toolbar(self):
-        modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
-        toolbar = QToolBar("Diff controls", self._linux_titlebar or self)
+    def _new_toolbar(self, title: str) -> QToolBar:
+        toolbar = QToolBar(title, self._linux_titlebar or self)
         toolbar.setObjectName("DifflyToolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
@@ -589,31 +574,39 @@ class MainWindow(QMainWindow):
             self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
         else:
             self._linux_titlebar.add_toolbar(toolbar)
+        return toolbar
 
+    def _toolbar_action(self, toolbar: QToolBar, icons: dict, label: str, kind: str,
+                        tip: str, callback) -> QAction:
+        action = QAction(label, self)
+        action.setToolTip(tip)
+        action.triggered.connect(callback)
+        toolbar.addAction(action)
+        icons[action] = kind
+        return action
+
+    @staticmethod
+    def _toolbar_spacer(toolbar: QToolBar):
+        spacer = QWidget(toolbar)
+        spacer.setFixedWidth(12)
+        toolbar.addWidget(spacer)
+
+    def _make_toolbar(self):
+        modifier = NAV_MODIFIER
+        toolbar = self._new_toolbar("Diff controls")
         self._toolbar_icons = {}
 
         def add(label, icon_kind, tip, callback):
-            action = QAction(label, self)
-            action.setToolTip(tip)
-            action.triggered.connect(callback)
-            toolbar.addAction(action)
-            self._toolbar_icons[action] = icon_kind
-            return action
+            return self._toolbar_action(toolbar, self._toolbar_icons, label, icon_kind, tip, callback)
 
         self.refresh_action = add("Refresh", "refresh", "Refresh directory comparison", self._refresh_current)
-        spacer = QWidget(toolbar)
-        spacer.setFixedWidth(12)
-        toolbar.addWidget(spacer)
+        self._toolbar_spacer(toolbar)
         self.previous_action = add("Previous", "up", f"Previous difference ({modifier}+Up)", lambda: self._navigate(-1))
         self.next_action = add("Next", "down", f"Next difference ({modifier}+Down)", lambda: self._navigate(1))
-        spacer = QWidget(toolbar)
-        spacer.setFixedWidth(12)
-        toolbar.addWidget(spacer)
+        self._toolbar_spacer(toolbar)
         self.apply_left_action = add("Apply ←", "apply_left", f"Copy selected right block to left ({modifier}+Left)", lambda: self._transfer(self._selected_hunk, False, _shift_held()))
         self.apply_right_action = add("Apply →", "apply_right", f"Copy selected left block to right ({modifier}+Right)", lambda: self._transfer(self._selected_hunk, True, _shift_held()))
-        spacer = QWidget(toolbar)
-        spacer.setFixedWidth(12)
-        toolbar.addWidget(spacer)
+        self._toolbar_spacer(toolbar)
         self.paste_action = add("Paste", "paste", "Paste clipboard into the active editor", self._paste_current)
         # Keep side-specific delete actions available to callers without
         # showing destructive controls in the compact toolbar.
@@ -625,63 +618,36 @@ class MainWindow(QMainWindow):
         toolbar.installEventFilter(self)
 
     def _make_merge_toolbar(self):
-        toolbar = QToolBar("Merge controls", self._linux_titlebar or self)
-        toolbar.setObjectName("DifflyToolbar")
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        toolbar.setIconSize(QSize(20, 20))
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        if self._linux_titlebar is None:
-            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
-        else:
-            self._linux_titlebar.add_toolbar(toolbar)
+        toolbar = self._new_toolbar("Merge controls")
         self._merge_toolbar_icons = {}
 
-        def add(label, kind, callback, tip):
-            action = QAction(label, self)
-            action.setToolTip(tip)
-            action.triggered.connect(callback)
-            toolbar.addAction(action)
-            self._merge_toolbar_icons[action] = kind
-            return action
+        def add(label, kind, tip, callback):
+            return self._toolbar_action(toolbar, self._merge_toolbar_icons, label, kind, tip, callback)
 
-        def spacer():
-            widget = QWidget(toolbar)
-            widget.setFixedWidth(12)
-            toolbar.addWidget(widget)
-
-        modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
-        self.merge_refresh_action = add("Refresh", "refresh", self.merge_view.reload_sources,
-                                        "Reload merge sources from disk and merge again")
-        spacer()
-        self.merge_previous_action = add("Previous conflict", "up", lambda: self.merge_view.navigate(-1),
-                                         f"Previous conflict ({modifier}+Up)")
-        self.merge_next_action = add("Next conflict", "down", lambda: self.merge_view.navigate(1),
-                                     f"Next conflict ({modifier}+Down)")
-        spacer()
-        self.merge_use_left_action = add("Use Left", "apply_right", lambda: self.merge_view.use("left"),
-                                         f"Use Left for selected conflict ({modifier}+1)")
-        self.merge_use_right_action = add("Use Right", "apply_left", lambda: self.merge_view.use("right"),
-                                          f"Use Right for selected conflict ({modifier}+2)")
-        self.merge_use_base_action = add("Use Base", "base", lambda: self.merge_view.use("base"),
-                                         f"Use Base for selected conflict ({modifier}+3)")
-        self.merge_resolved_action = add("Mark Resolved", "check", self.merge_view.mark_resolved,
-                                         f"Mark edited conflict as resolved ({modifier}+0)")
+        modifier = NAV_MODIFIER
+        self.merge_refresh_action = add("Refresh", "refresh", "Reload merge sources from disk and merge again",
+                                        self.merge_view.reload_sources)
+        self._toolbar_spacer(toolbar)
+        self.merge_previous_action = add("Previous conflict", "up", f"Previous conflict ({modifier}+Up)",
+                                         lambda: self.merge_view.navigate(-1))
+        self.merge_next_action = add("Next conflict", "down", f"Next conflict ({modifier}+Down)",
+                                     lambda: self.merge_view.navigate(1))
+        self._toolbar_spacer(toolbar)
+        self.merge_use_left_action = add("Use Left", "apply_right", f"Use Left for selected conflict ({modifier}+1)",
+                                         lambda: self.merge_view.use("left"))
+        self.merge_use_right_action = add("Use Right", "apply_left", f"Use Right for selected conflict ({modifier}+2)",
+                                          lambda: self.merge_view.use("right"))
+        self.merge_use_base_action = add("Use Base", "base", f"Use Base for selected conflict ({modifier}+3)",
+                                         lambda: self.merge_view.use("base"))
+        self.merge_resolved_action = add("Mark Resolved", "check", f"Mark edited conflict as resolved ({modifier}+0)",
+                                         self.merge_view.mark_resolved)
         self.merge_toolbar = toolbar
         toolbar.hide()
         self._refresh_merge_toolbar()
 
     def _make_settings_toolbar(self):
-        toolbar = QToolBar("Settings controls", self._linux_titlebar or self)
-        toolbar.setObjectName("DifflyToolbar")
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        if self._linux_titlebar is None:
-            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
-        else:
-            self._linux_titlebar.add_toolbar(toolbar)
-        self.settings_toolbar = toolbar
-        toolbar.hide()
+        self.settings_toolbar = self._new_toolbar("Settings controls")
+        self.settings_toolbar.hide()
 
     def _refresh_merge_toolbar(self):
         if not hasattr(self, "merge_toolbar"):
@@ -725,7 +691,7 @@ class MainWindow(QMainWindow):
             self.paste_action.setEnabled(False)
             self.delete_left_action.setEnabled(False)
             self.delete_right_action.setEnabled(False)
-            modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
+            modifier = NAV_MODIFIER
             self.previous_action.setToolTip(f"Previous different file ({modifier}+Up)")
             self.next_action.setToolTip(f"Next different file ({modifier}+Down)")
             entry = view.selected_entry()
@@ -747,7 +713,7 @@ class MainWindow(QMainWindow):
         self.paste_action.setEnabled(files_active)
         for action in (self.apply_left_action, self.apply_right_action, self.delete_left_action, self.delete_right_action):
             action.setEnabled(selected)
-        modifier = "Command+Option" if sys.platform == "darwin" else "Ctrl+Alt"
+        modifier = NAV_MODIFIER
         self.previous_action.setToolTip(f"Previous difference ({modifier}+Up)")
         self.next_action.setToolTip(f"Next difference ({modifier}+Down)")
         if self._append_mode:
@@ -847,7 +813,7 @@ class MainWindow(QMainWindow):
                 timer.stop()
             for editor in (self.left, self.right):
                 editor.highlighter.set_spans(())
-        self._update_horizontal_scroll_range()
+        self.horizontal_sync.update_range()
         self.gutter.update()
         self.config.settings["show_line_numbers"] = line_numbers
         self.config.settings["syntax_highlighting"] = syntax_highlighting
@@ -984,7 +950,7 @@ class MainWindow(QMainWindow):
         for editor in (self.left, self.right):
             editor.set_font(font, width, width)
         self.merge_view.set_appearance(self.config.themes[self._active_theme_name], font, width, width)
-        self._update_horizontal_scroll_range()
+        self.horizontal_sync.update_range()
         try:
             save_indent_width(width)
         except OSError as exc:
@@ -995,9 +961,7 @@ class MainWindow(QMainWindow):
             return
         self._syncing_scroll = True
         try:
-            row = source.editor.visual_row(value) if value else 0
-            self.shared_scrollbar.setValue(row)
-            target.editor.verticalScrollBar().setValue(target.editor.block_for_visual_row(row))
+            self.shared_scrollbar.setValue(follow_scroll(source, value, (target,)))
         finally:
             self._syncing_scroll = False
 
@@ -1006,8 +970,7 @@ class MainWindow(QMainWindow):
             return
         self._syncing_scroll = True
         try:
-            self.left.editor.verticalScrollBar().setValue(self.left.editor.block_for_visual_row(value))
-            self.right.editor.verticalScrollBar().setValue(self.right.editor.block_for_visual_row(value))
+            scroll_to_row((self.left, self.right), value)
         finally:
             self._syncing_scroll = False
 
@@ -1018,26 +981,6 @@ class MainWindow(QMainWindow):
             editor.visual_row(bar.maximum()) for editor, bar in zip(editors, bars)
         ))
         self.shared_scrollbar.setPageStep(max(bar.pageStep() for bar in bars))
-
-    def _scroll_both_horizontal(self, value: int):
-        if self._syncing_horizontal_scroll:
-            return
-        self._syncing_horizontal_scroll = True
-        try:
-            self.shared_horizontal_scrollbar.setValue(value)
-            for editor in (self.left, self.right):
-                editor.editor.horizontalScrollBar().setValue(value)
-        finally:
-            self._syncing_horizontal_scroll = False
-
-    def _update_horizontal_scroll_range(self, *_):
-        bars = (self.left.editor.horizontalScrollBar(), self.right.editor.horizontalScrollBar())
-        shared = self.shared_horizontal_scrollbar
-        shared.setRange(0, max(bar.maximum() for bar in bars))
-        shared.setPageStep(min(bar.pageStep() for bar in bars))
-        shared.setSingleStep(bars[0].singleStep())
-        shared.setVisible(shared.maximum() > 0)
-        self._scroll_both_horizontal(shared.value())
 
     def eventFilter(self, watched, event):
         if (watched in (self.left.editor, self.right.editor)
@@ -1059,19 +1002,12 @@ class MainWindow(QMainWindow):
                 return True
         if (event.type() == QEvent.Type.Wheel
                 and watched in (self.left.editor.viewport(), self.right.editor.viewport(), self.shared_horizontal_scrollbar)):
-            horizontal = (watched is self.shared_horizontal_scrollbar
-                          or abs(event.pixelDelta().x()) > abs(event.pixelDelta().y())
-                          or abs(event.angleDelta().x()) > abs(event.angleDelta().y())
-                          or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
-            bar = self.shared_horizontal_scrollbar if horizontal else self.shared_scrollbar
-            if horizontal and not event.pixelDelta().isNull():
-                delta = event.pixelDelta().x() or event.pixelDelta().y()
-                bar.setValue(bar.value() - delta)
-                event.accept()
+            on_bar = watched is self.shared_horizontal_scrollbar
+            if self.horizontal_sync.handle_wheel(event, on_bar):
                 return True
-            if watched is bar:
+            if on_bar:
                 return False
-            QApplication.sendEvent(bar, event)
+            QApplication.sendEvent(self.shared_scrollbar, event)
             return True
         if self.toolbar is not None and watched is self.toolbar and event.type() == QEvent.Type.MouseButtonDblClick:
             if self.isMaximized():
@@ -1374,7 +1310,7 @@ class MainWindow(QMainWindow):
                                       self.right.state.revision, self.compare_options))
         self.shared_scrollbar.setValue(vertical)
         self._scroll_both(self.shared_scrollbar.value())
-        self._scroll_both_horizontal(horizontal)
+        self.horizontal_sync.scroll(horizontal)
         target.editor.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _copy_directory_entry(self, relative_path: str, to_left: bool):

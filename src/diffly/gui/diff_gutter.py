@@ -37,6 +37,28 @@ def draw_ribbon(painter: QPainter, width: float, left_top: float, left_bottom: f
     painter.drawPath(bottom_edge)
 
 
+def line_edges(editor, start: int, end: int, widget: QWidget) -> tuple[float, float] | None:
+    """Top and bottom of lines [start, end) of a CodeEditor in `widget` coordinates.
+
+    An empty range sits above its alignment placeholder lines, where the
+    other side's block starts.
+    """
+    count = editor.document().blockCount()
+    if start < count:
+        top = editor.line_top(start)
+        if start == end:
+            top -= sum(gap for line, gap in editor.placeholder_ranges if line == start) * editor.line_height()
+    else:
+        last = editor.line_top(count - 1)
+        top = last + editor.line_height() if last is not None else None
+    if top is None:
+        return None
+    bottom = (editor.line_top(min(end - 1, count - 1)) + editor.line_height()
+              if end > start else top)
+    offset = widget.mapFromGlobal(editor.viewport().mapToGlobal(QPointF(0, 0))).y()
+    return offset + top, offset + bottom
+
+
 class DiffGutter(QWidget):
     # row, source_is_left, append
     transfer_requested = Signal(int, bool, bool)
@@ -82,25 +104,9 @@ class DiffGutter(QWidget):
         self.append = append
         self.update()
 
-    def _edge(self, editor, start: int, end: int) -> tuple[float, float] | None:
-        count = editor.document().blockCount()
-        if start < count:
-            top = editor.line_top(start)
-            if start == end:
-                top -= sum(gap for line, gap in editor.placeholder_ranges if line == start) * editor.line_height()
-        else:
-            last = editor.line_top(count - 1)
-            top = last + editor.line_height() if last is not None else None
-        if top is None:
-            return None
-        bottom = (editor.line_top(min(end - 1, count - 1)) + editor.line_height()
-                  if end > start else top)
-        offset = self.mapFromGlobal(editor.viewport().mapToGlobal(QPointF(0, 0))).y()
-        return offset + top, offset + bottom
-
     def _edges(self, hunk) -> tuple[float, float, float, float] | None:
-        left = self._edge(self.left_editor, hunk.left_start, hunk.left_end)
-        right = self._edge(self.right_editor, hunk.right_start, hunk.right_end)
+        left = line_edges(self.left_editor, hunk.left_start, hunk.left_end, self)
+        right = line_edges(self.right_editor, hunk.right_start, hunk.right_end, self)
         if left is None or right is None:
             return None
         return *left, *right

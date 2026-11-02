@@ -1,11 +1,27 @@
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMenu, QPlainTextEdit, QTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from diffly.core.diff.engine import Hunk, TextSpan
 from diffly.core.documents.model import DocumentState
 from diffly.gui.code_editor import CodeEditor
 from diffly.gui.syntax_highlighter import SyntaxHighlighter
+from diffly.services.file_service import ENCODINGS
+
+
+def encoding_button(parent: QWidget, choose) -> QToolButton:
+    """Status-bar encoding button whose menu calls choose(encoding or None for Auto)."""
+    button = QToolButton(parent)
+    button.setObjectName("EncodingButton")
+    button.setAutoRaise(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    menu = QMenu(button)
+    menu.addAction("Auto", lambda: choose(None))
+    for label, encoding in ENCODINGS:
+        menu.addAction(label, lambda checked=False, value=encoding: choose(value))
+    button.setMenu(menu)
+    return button
 
 
 class EditorWidget(QWidget):

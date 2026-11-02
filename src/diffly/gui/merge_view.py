@@ -3,21 +3,21 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QTextCursor
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QScrollBar, QToolButton,
-                               QVBoxLayout, QWidget, QMenu)
+                               QPushButton, QScrollBar, QVBoxLayout, QWidget)
 
 from diffly.core.diff.engine import CompareOptions
 from diffly.core.documents.syntax import language_for
 from diffly.core.merge.three_way import MergeResult
-from diffly.gui.diff_gutter import BUTTON, draw_ribbon
+from diffly.gui.diff_gutter import BUTTON, draw_ribbon, line_edges
 from diffly.gui.diff_overview import DiffOverview
-from diffly.gui.editor_widget import EditorWidget
+from diffly.gui.editor_widget import EditorWidget, encoding_button
 from diffly.gui.icons import toolbar_icon
+from diffly.gui.scroll_sync import HorizontalScrollSync, follow_scroll, scroll_to_row
 from diffly.gui.seamless_splitter import SeamlessSplitter
-from diffly.services.file_service import ENCODINGS, file_stamp, read_text_file, status_encoding_text, write_file
+from diffly.services.file_service import file_stamp, read_text_file, status_encoding_text, write_file
 
 
 def _merge_language(path: Path | None, text: str) -> str | None:
@@ -139,28 +139,18 @@ class _ApplyGutter(QWidget):
                 button.hide()
                 continue
             source = self.view.sources[1 if self.side == "left" else 2]
-            first, last = getattr(region.record, f"{self.side}_range")
-            y = round(self._range_top(source, first, last)
-                      + (source.editor.line_height() - button.height()) / 2)
-            if y < 0 or y + button.height() > self.height():
+            edges = line_edges(source.editor, *getattr(region.record, f"{self.side}_range"), self)
+            y = None if edges is None else round(edges[0] + (source.editor.line_height() - button.height()) / 2)
+            if y is None or y < 0 or y + button.height() > self.height():
                 button.hide()
             else:
                 button.move(2 if self.side == "left" else self.width() - button.width() - 2, y)
                 button.show()
         self.update()
 
-    def _line_y(self, editor: EditorWidget, line: int) -> float:
-        line = min(line, editor.editor.document().blockCount() - 1)
-        top = editor.editor.line_top(line)
-        offset = self.mapFromGlobal(editor.editor.viewport().mapToGlobal(QPoint(0, 0))).y()
-        return offset + top
-
-    def _range_top(self, editor: EditorWidget, first: int, last: int) -> float:
-        top = self._line_y(editor, first)
-        if first == last:
-            gap = sum(count for line, count in editor.editor.placeholder_ranges if line == first)
-            top -= gap * editor.editor.line_height()
-        return top
+    def _result_edges(self, region) -> tuple[float, float] | None:
+        first, end = self.view._result_lines(region)
+        return line_edges(self.view.result.editor, first, first if region.start == region.end else end, self)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -173,20 +163,12 @@ class _ApplyGutter(QWidget):
         for region in self.view._regions:
             if not self.view.region_action_available(region, self.side):
                 continue
-            first, last = getattr(region.record, f"{self.side}_range")
-            source_top = self._range_top(source, first, last)
-            source_bottom = (source_top if first == last else
-                             self._line_y(source, last - 1) + source.editor.line_height())
-            result_cursor = QTextCursor(self.view.result.editor.document())
-            result_cursor.setPosition(min(region.start, self.view.result.editor.document().characterCount() - 1))
-            result_line = result_cursor.blockNumber()
-            result_cursor.setPosition(min(max(region.start, region.end - 1),
-                                          self.view.result.editor.document().characterCount() - 1))
-            result_end_line = max(result_line, result_cursor.blockNumber())
-            result_top = self._range_top(self.view.result, result_line,
-                                         result_line if region.start == region.end else result_end_line + 1)
-            result_bottom = (result_top if region.start == region.end else
-                             self._line_y(self.view.result, result_end_line) + self.view.result.editor.line_height())
+            source_edges = line_edges(source.editor, *getattr(region.record, f"{self.side}_range"), self)
+            result_edges = self._result_edges(region)
+            if source_edges is None or result_edges is None:
+                continue
+            source_top, source_bottom = source_edges
+            result_top, result_bottom = result_edges
             if self.side == "left":
                 left_top, left_bottom = source_top, source_bottom
                 right_top, right_bottom = result_top, result_bottom
@@ -237,7 +219,6 @@ class MergeView(QWidget):
         self._busy = False
         self._loading = False
         self._syncing_scroll = False
-        self._syncing_horizontal = False
         self._navigated = False
         self._navigating = False
         self.compare_options = CompareOptions()
@@ -276,16 +257,7 @@ class MergeView(QWidget):
         self.buttons["Reload Sources"] = QAction("Reload Merge Sources", self)
         self.buttons["Reload Sources"].triggered.connect(self.reload_sources)
         add_button("Save Result", "Save Result", self.save)
-        self.encoding_button = QToolButton(self)
-        self.encoding_button.setObjectName("EncodingButton")
-        self.encoding_button.setAutoRaise(True)
-        self.encoding_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.encoding_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        encoding_menu = QMenu(self.encoding_button)
-        encoding_menu.addAction("Auto", lambda: self._set_encoding(None))
-        for label, encoding in ENCODINGS:
-            encoding_menu.addAction(label, lambda checked=False, value=encoding: self._set_encoding(value))
-        self.encoding_button.setMenu(encoding_menu)
+        self.encoding_button = encoding_button(self, self._set_encoding)
         for key in ("Previous conflict", "Next conflict", "Use Base", "Mark Resolved", "Save Result"):
             self.buttons[key].hide()
         self.encoding_button.hide()
@@ -341,16 +313,14 @@ class MergeView(QWidget):
         outer.addWidget(top, 1)
         # One horizontal scrollbar for all visible panes, as in the Files tab.
         self.horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
-        self.horizontal_scrollbar.hide()
-        self.horizontal_scrollbar.valueChanged.connect(self._sync_horizontal)
         outer.addWidget(self.horizontal_scrollbar)
+        self.panes = (self.sources[1], self.result, self.sources[2])
+        self.horizontal_sync = HorizontalScrollSync(self.panes, self.horizontal_scrollbar)
         self.footer = QLabel("0 conflicts · 0 unresolved")
         self.result.editor.document().contentsChange.connect(self._result_changed)
-        for pane in (self.sources[1], self.result, self.sources[2]):
+        for pane in self.panes:
             pane.editor.verticalScrollBar().valueChanged.connect(
                 lambda value, source=pane: self._sync_scroll(source, value))
-            pane.editor.horizontalScrollBar().valueChanged.connect(self._sync_horizontal)
-            pane.editor.horizontalScrollBar().rangeChanged.connect(self._update_horizontal_range)
             pane.editor.cursorPositionChanged.connect(
                 lambda source=pane: self._cursor_conflict_changed(source))
         self.result.edited.connect(self._update_status)
@@ -373,40 +343,9 @@ class MergeView(QWidget):
                     operation()
                 event.accept()
                 return True
-        if (event.type() == QEvent.Type.Wheel
-                and (abs(event.pixelDelta().x()) > abs(event.pixelDelta().y())
-                     or abs(event.angleDelta().x()) > abs(event.angleDelta().y())
-                     or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))):
-            bar = self.horizontal_scrollbar
-            if not event.pixelDelta().isNull():
-                bar.setValue(bar.value() - (event.pixelDelta().x() or event.pixelDelta().y()))
-            else:
-                QApplication.sendEvent(bar, event)
-            event.accept()
+        if event.type() == QEvent.Type.Wheel and self.horizontal_sync.handle_wheel(event):
             return True
         return super().eventFilter(watched, event)
-
-    def _sync_horizontal(self, value: int):
-        if self._syncing_horizontal:
-            return
-        self._syncing_horizontal = True
-        try:
-            # Shorter documents clamp at their own right edge.
-            self.horizontal_scrollbar.setValue(value)
-            for pane in (self.sources[1], self.result, self.sources[2]):
-                pane.editor.horizontalScrollBar().setValue(value)
-        finally:
-            self._syncing_horizontal = False
-
-    def _update_horizontal_range(self, *_):
-        bars = tuple(pane.editor.horizontalScrollBar()
-                     for pane in (self.sources[1], self.result, self.sources[2]))
-        shared = self.horizontal_scrollbar
-        shared.setRange(0, max(bar.maximum() for bar in bars))
-        shared.setPageStep(min(bar.pageStep() for bar in bars))
-        shared.setSingleStep(bars[0].singleStep())
-        shared.setVisible(shared.maximum() > 0)
-        self._sync_horizontal(shared.value())
 
     def _cursor_conflict_changed(self, pane: EditorWidget):
         # Select the conflict under the cursor so Use Left/Right act on it.
@@ -442,11 +381,7 @@ class MergeView(QWidget):
             return
         self._syncing_scroll = True
         try:
-            row = source.editor.visual_row(value) if value else 0
-            for pane in (self.sources[1], self.result, self.sources[2]):
-                if pane is not source:
-                    pane.editor.verticalScrollBar().setValue(
-                        pane.editor.block_for_visual_row(row))
+            follow_scroll(source, value, self.panes)
         finally:
             self._syncing_scroll = False
 
@@ -801,14 +736,12 @@ class MergeView(QWidget):
         finally:
             self._navigating = False
         # Place the conflict a third of the way down, like the Files tab.
-        panes = (self.sources[1], self.result, self.sources[2])
         start_row = min(pane.editor.visual_row(line) for pane, line in zip(
-            panes, (conflict.record.left_range[0], cursor.blockNumber(), conflict.record.right_range[0])))
+            self.panes, (conflict.record.left_range[0], cursor.blockNumber(), conflict.record.right_range[0])))
         row = max(0, start_row - self.result.editor.verticalScrollBar().pageStep() // 3)
         self._syncing_scroll = True
         try:
-            for pane in panes:
-                pane.editor.verticalScrollBar().setValue(pane.editor.block_for_visual_row(row))
+            scroll_to_row(self.panes, row)
         finally:
             self._syncing_scroll = False
         self._update_status()
